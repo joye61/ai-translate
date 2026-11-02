@@ -155,7 +155,7 @@ internal sealed class ScreenshotOverlayWindow : Window
                 FontSize = 12.5,
                 VerticalAlignment = VerticalAlignment.Center
             }),
-            SelectedItem = TranslationLanguages.Get(_targetLangId)
+            SelectedItem = TranslationLanguages.GetOrDefault(_targetLangId)
         };
         _languageCombo.SelectionChanged += (_, _) =>
         {
@@ -352,9 +352,17 @@ internal sealed class ScreenshotOverlayWindow : Window
         try { _languageCombo.SelectedItem = TranslationLanguages.Get(languageId); }
         finally { _syncingCombo = false; }
 
-        if (forceRetry) _cachedTranslations.Remove(languageId);
+        if (forceRetry)
+        {
+            // "重新识别并翻译" promises a fresh OCR pass, not just a re-translation of stale regions.
+            _ocrResult = null;
+            _regions = [];
+            _cachedTranslations.Clear();
+        }
         _cts?.Cancel();
-        _cts?.Dispose();
+        // Do not dispose the superseded CTS here: a still-in-flight previous call may be about to
+        // link/register against its token (e.g. inside RecognizeAsync), which would throw
+        // ObjectDisposedException. Cancelling is enough; the old instance is now unreferenced and GC-eligible.
         _cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var token = _cts.Token;
 
@@ -490,7 +498,7 @@ internal sealed class ScreenshotOverlayWindow : Window
                 if (Clipboard is not null)
                 {
                     using var ms = new MemoryStream(png);
-                    var bmp = new Bitmap(ms);
+                    using var bmp = new Bitmap(ms);
                     await Clipboard.SetBitmapAsync(bmp);
                 }
                 Close();

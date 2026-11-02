@@ -201,11 +201,11 @@ public sealed class EngineSettingsView : UserControl
             Spacing = 10,
             Children =
             {
-                StudioUi.CreateSectionHeader("keyboard-outline", "跨平台热键与系统托盘常驻说明", "Windows / macOS / Linux & System Tray", AppTheme.Emerald),
+                StudioUi.CreateSectionHeader("keyboard-outline", "跨平台热键与系统托盘常驻说明", "Windows / macOS / Linux & System Tray", AppTheme.TextSecondary),
                 StudioUi.CreateInfoTile("呼出 / 激活主工作台窗口", current.ShowWindowHotkey.ToString(), "translate", AppTheme.AccentBright),
-                StudioUi.CreateInfoTile("全局划词速译 (自动提取选中文本并无感还原原剪贴板)", current.SelectionTranslateHotkey.ToString(), "cursor-text", AppTheme.Purple),
-                StudioUi.CreateInfoTile("XCapture 引擎截图原位翻译 (RapidOCR + 原位擦除排版重绘)", current.ScreenshotTranslateHotkey.ToString(), "crop-free", AppTheme.Emerald),
-                StudioUi.CreateInfoTile("立即读取并精翻剪贴板", current.ClipboardTranslateHotkey.ToString(), "clipboard-text-outline", AppTheme.Amber)
+                StudioUi.CreateInfoTile("全局划词速译 (自动提取选中文本并无感还原原剪贴板)", current.SelectionTranslateHotkey.ToString(), "cursor-text", AppTheme.AccentBright),
+                StudioUi.CreateInfoTile("XCapture 引擎截图原位翻译 (RapidOCR + 原位擦除排版重绘)", current.ScreenshotTranslateHotkey.ToString(), "crop-free", AppTheme.AccentBright),
+                StudioUi.CreateInfoTile("立即读取并精翻剪贴板", current.ClipboardTranslateHotkey.ToString(), "clipboard-text-outline", AppTheme.AccentBright)
             }
         });
 

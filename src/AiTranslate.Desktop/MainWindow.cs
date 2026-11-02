@@ -240,13 +240,16 @@ public sealed class MainWindow : Window
                         Children =
                         {
                             _statusFooterText,
-                            StudioUi.CreateBadge("托盘常驻已启用", AppTheme.EmeraldSoft, AppTheme.Emerald)
+                            new Border
+                            {
+                                [Grid.ColumnProperty] = 1,
+                                Child = StudioUi.CreateBadge("托盘常驻已启用", AppTheme.EmeraldSoft, AppTheme.Emerald)
+                            }
                         }
                     }
                 }
             }
         };
-        Grid.SetColumn(((Grid)((Border)contentHost.Children[1]).Child!).Children[1], 1);
 
         var rootGrid = new Grid
         {
@@ -280,7 +283,11 @@ public sealed class MainWindow : Window
         RegisterGlobalHotkeys();
         OnVocabularyChanged();
         SwitchTab(0);
-        _ = _dictionaryView.LookupAsync("serendipity", null, TranslationTriggerSource.ManualInput, "精选词条");
+        // Only auto-run the "serendipity" showcase lookup for genuinely new users (empty
+        // notebook). Previously this fired on every single startup, silently burning an AI API
+        // call (real money for paid keys) each time the app was reopened from the tray.
+        if (_vocabularyService.GetDashboardStats().TotalEntries == 0)
+            _ = _dictionaryView.LookupAsync("serendipity", null, TranslationTriggerSource.ManualInput, "精选词条");
     }
 
     protected override void OnClosing(WindowClosingEventArgs e)
@@ -367,8 +374,8 @@ public sealed class MainWindow : Window
             Children =
             {
                 CreateQuickCaptureBtn("crop-free", "XCapture 截图翻译 (Alt+S)", AppTheme.AccentSoft, AppTheme.AccentBright, () => _ = _screenshotCoordinator.StartCaptureAndTranslateAsync()),
-                CreateQuickCaptureBtn("cursor-text", "灵动划词速译 (Alt+Q)", AppTheme.PurpleSoft, AppTheme.Purple, () => _ = TriggerSelectionHotkeyAsync()),
-                CreateQuickCaptureBtn("clipboard-text-outline", "读取剪贴板精翻 (Alt+W)", AppTheme.EmeraldSoft, AppTheme.Emerald, () => _ = TranslateClipboardNowAsync())
+                CreateQuickCaptureBtn("cursor-text", "灵动划词速译 (Alt+Q)", AppTheme.AccentSoft, AppTheme.AccentBright, () => _ = TriggerSelectionHotkeyAsync()),
+                CreateQuickCaptureBtn("clipboard-text-outline", "读取剪贴板精翻 (Alt+W)", AppTheme.AccentSoft, AppTheme.AccentBright, () => _ = TranslateClipboardNowAsync())
             }
         };
 
@@ -454,8 +461,10 @@ public sealed class MainWindow : Window
             await _selectionPopup.ShowAndTranslateAsync(captured);
             return;
         }
-        var cursor = _platform.GetCursorPosition();
-        await _selectionPopup.ShowAndTranslateAsync(new CapturedTextEvent("serendipity", TranslationTriggerSource.SelectionPopup, cursor, "划词翻译快捷键"));
+        // No selection was captured — tell the user instead of silently translating a hardcoded
+        // demo word ("serendipity"), which previously masked capture failures as if they'd
+        // succeeded on an unrelated word.
+        SetStatus("未检测到选中的文本，请先在任意应用中选中文字后再按划词快捷键。");
     }
 
     private async Task TranslateClipboardNowAsync()

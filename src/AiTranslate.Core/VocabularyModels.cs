@@ -272,7 +272,10 @@ public static class SpacedRepetitionScheduler
                 var easyBonus = rating == ReviewRating.Easy ? 1.38 : 1.0;
                 var difficultyFactor = (11.0 - newDifficulty) * 0.22;
                 var retentionGain = 1.0 + difficultyFactor * Math.Pow(prevStability, -0.18) * (Math.Exp(0.75 * (1.0 - retrievability)) - 0.1) * hardPenalty * easyBonus;
-                newStability = Math.Clamp(prevStability * Math.Max(1.15, retentionGain), 0.5, 3650.0);
+                // Floor at 1.0 (never shrink on a correct recall) rather than 1.15, which previously forced an
+                // artificial +15% stability growth even for well-retained/high-difficulty items, breaking the
+                // FSRS property that growth approaches 1 (no gain) as retrievability nears 1.
+                newStability = Math.Clamp(prevStability * Math.Max(1.0, retentionGain), 0.5, 3650.0);
 
                 var intervalDays = Math.Max(rating == ReviewRating.Hard ? 0.5 : 1.0, newStability);
                 nextInterval = TimeSpan.FromDays(intervalDays);

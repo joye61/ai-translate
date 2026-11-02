@@ -90,7 +90,7 @@ public sealed class DictionaryStudioView : UserControl
             Width = 150,
             CornerRadius = new CornerRadius(8),
             ItemsSource = TranslationLanguages.All,
-            SelectedItem = TranslationLanguages.Get(_settingsStore.Current.DefaultTargetLanguage),
+            SelectedItem = TranslationLanguages.GetOrDefault(_settingsStore.Current.DefaultTargetLanguage),
             ItemTemplate = new FuncDataTemplate<TranslationLanguage>((l, _) => new TextBlock { Text = l?.DisplayName })
         };
 
@@ -133,47 +133,53 @@ public sealed class DictionaryStudioView : UserControl
             sampleChips.Children.Add(chip);
         }
 
-        var actionRow = new Grid
+        var langSelectorRow = new StackPanel
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto,Auto,Auto"),
-            ColumnSpacing = 10,
+            Orientation = Orientation.Horizontal,
+            Spacing = 16,
+            VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
                 new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 6,
-                    Children =
-                    {
-                        new MdiIcon("translate", 15, AppTheme.AccentBright),
-                        _targetLangCombo
-                    }
+                    Children = { new MdiIcon("translate", 15, AppTheme.AccentBright), _targetLangCombo }
                 },
                 new StackPanel
                 {
-                    [Grid.ColumnProperty] = 1,
                     Orientation = Orientation.Horizontal,
                     Spacing = 6,
-                    Children =
-                    {
-                        new MdiIcon("book-open-page-variant", 15, AppTheme.Emerald),
-                        _targetNotebookCombo
-                    }
-                },
-                sampleChips,
+                    Children = { new MdiIcon("book-open-page-variant", 15, AppTheme.TextSecondary), _targetNotebookCombo }
+                }
+            }
+        };
+
+        // A WrapPanel (rather than a fixed-column Grid) keeps the toolbar usable down to the
+        // window's MinWidth: controls reflow onto a second line instead of being clipped off-screen.
+        var controlsRow = new WrapPanel
+        {
+            Children = { langSelectorRow, sampleChips }
+        };
+        langSelectorRow.Margin = new Thickness(0, 0, 20, 8);
+        sampleChips.Margin = new Thickness(0, 0, 0, 8);
+
+        var actionButtonsRow = new WrapPanel
+        {
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Children =
+            {
                 StudioUi.CreateSecondaryButton("clipboard-text-outline", "剪贴板精翻", () => _ = _onReadClipboardTranslate()),
                 StudioUi.CreateSecondaryButton("crop-free", "截图原位翻译", () => _ = _onStartScreenshotTranslate()),
                 StudioUi.CreatePrimaryButton("sparkles", "AI 深度解析", () =>
                     _ = LookupAsync(_inputBox.Text ?? "", _contextBox.Text, TranslationTriggerSource.ManualInput, "手动查询"))
             }
         };
-        Grid.SetColumn(sampleChips, 2);
-        Grid.SetColumn(actionRow.Children[3], 3);
-        Grid.SetColumn(actionRow.Children[4], 4);
-        Grid.SetColumn(actionRow.Children[5], 5);
+        foreach (var child in actionButtonsRow.Children)
+            if (child is Control c) c.Margin = new Thickness(0, 0, 10, 0);
 
         var commandDeck = StudioUi.CreateBentoCard(
-            new StackPanel { Spacing = 10, Children = { _inputBox, _contextBox, actionRow } },
+            new StackPanel { Spacing = 10, Children = { _inputBox, _contextBox, controlsRow, actionButtonsRow } },
             padding: new Thickness(18, 16),
             borderBrush: AppTheme.BorderStrong);
         commandDeck.Margin = new Thickness(24, 20, 24, 12);
@@ -283,15 +289,26 @@ public sealed class DictionaryStudioView : UserControl
         var badgesRow = new WrapPanel { Margin = new Thickness(0, 2, 0, 2) };
         badgesRow.Children.Add(new Border
         {
+            Margin = new Thickness(0, 0, 8, 4),
+            Child = StudioUi.CreateBadge(UiLabels.ItemType(result.ItemType), AppTheme.AccentSoft, AppTheme.AccentBright)
+        });
+        // Fixed-format datum: the detected source language -> the target language that was actually
+        // translated to. These two fields come straight from the structured AI response and were
+        // previously computed but never shown to the user.
+        badgesRow.Children.Add(new Border
+        {
             Margin = new Thickness(0, 0, 10, 4),
-            Child = StudioUi.CreateBadge(result.ItemType.ToString(), AppTheme.AccentSoft, AppTheme.AccentBright)
+            Child = StudioUi.CreateBadge(
+                $"{UiLabels.Language(result.DetectedSourceLanguage)} → {UiLabels.Language(result.TargetLanguage)}",
+                AppTheme.CardElevatedBg,
+                AppTheme.TextSecondary)
         });
         foreach (var tag in result.SuggestedTags)
         {
             badgesRow.Children.Add(new Border
             {
                 Margin = new Thickness(0, 0, 8, 4),
-                Child = StudioUi.CreateBadge($"#{tag}", AppTheme.PurpleSoft, AppTheme.Purple)
+                Child = StudioUi.CreateBadge($"#{tag}", AppTheme.CardElevatedBg, AppTheme.TextSecondary)
             });
         }
 
@@ -357,6 +374,35 @@ public sealed class DictionaryStudioView : UserControl
         };
         _bentoStage.Children.Add(StudioUi.CreateHeroCard(heroGrid));
 
+        // Visual seam marking the transition from fixed structured data (above) to AI-generated
+        // deep analysis (below) — makes the "fixed format + AI dynamic content" split legible at a glance.
+        _bentoStage.Children.Add(new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"),
+            ColumnSpacing = 10,
+            Margin = new Thickness(2, 4, 2, -4),
+            Children =
+            {
+                StudioUi.CreateBadge("AI 深度解析", AppTheme.PurpleSoft, AppTheme.Purple),
+                new TextBlock
+                {
+                    [Grid.ColumnProperty] = 1,
+                    Text = "以下内容由 AI 实时生成，结合语境动态呈现",
+                    FontSize = 12,
+                    Foreground = AppTheme.TextMuted,
+                    VerticalAlignment = VerticalAlignment.Center
+                },
+                new Border
+                {
+                    [Grid.ColumnProperty] = 2,
+                    Height = 1,
+                    Background = AppTheme.BorderSubtle,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(4, 0, 0, 0)
+                }
+            }
+        });
+
         // 2. ASYMMETRIC 2-COLUMN BENTO MATRIX (Left: Senses + Examples | Right: Etymology + Mnemonic + Collocations)
         var leftColumn = new StackPanel { Spacing = 16 };
         var rightColumn = new StackPanel { Spacing = 16 };
@@ -386,7 +432,7 @@ public sealed class DictionaryStudioView : UserControl
                                 Spacing = 10,
                                 Children =
                                 {
-                                    StudioUi.CreateBadge(sense.PartOfSpeech, AppTheme.AmberSoft, AppTheme.Amber),
+                                    StudioUi.CreateBadge(sense.PartOfSpeech, AppTheme.CardElevatedBg, AppTheme.AccentBright),
                                     new TextBlock
                                     {
                                         Text = sense.DefinitionZh,
@@ -440,7 +486,7 @@ public sealed class DictionaryStudioView : UserControl
         if (result.Examples.Count > 0)
         {
             var exStack = new StackPanel { Spacing = 10 };
-            exStack.Children.Add(StudioUi.CreateSectionHeader("format-quote-close", "真实语料库双语例句", "Authentic Context Examples", AppTheme.Emerald));
+            exStack.Children.Add(StudioUi.CreateSectionHeader("format-quote-close", "真实语料库双语例句", "Authentic Context Examples", AppTheme.TextSecondary));
             foreach (var ex in result.Examples)
             {
                 var exSentence = ex.SourceSentence;
@@ -499,12 +545,12 @@ public sealed class DictionaryStudioView : UserControl
             !string.IsNullOrWhiteSpace(result.ContextMeaning))
         {
             var cogStack = new StackPanel { Spacing = 10 };
-            cogStack.Children.Add(StudioUi.CreateSectionHeader("lightbulb-on-outline", "AI 词源拆解与认知助记", "Etymology, Mnemonics & Syntax", AppTheme.Amber));
+            cogStack.Children.Add(StudioUi.CreateSectionHeader("lightbulb-on-outline", "AI 词源拆解与认知助记", "Etymology, Mnemonics & Syntax", AppTheme.Purple));
 
             if (!string.IsNullOrWhiteSpace(result.ContextMeaning))
                 cogStack.Children.Add(StudioUi.CreateInfoTile("当前语境精准义", result.ContextMeaning, "sparkles", AppTheme.AccentBright));
             if (!string.IsNullOrWhiteSpace(result.EtymologyAndRoot))
-                cogStack.Children.Add(StudioUi.CreateInfoTile("词源与词根词缀基因 (Etymology & Roots)", result.EtymologyAndRoot, "code-braces", AppTheme.Emerald));
+                cogStack.Children.Add(StudioUi.CreateInfoTile("词源与词根词缀基因 (Etymology & Roots)", result.EtymologyAndRoot, "code-braces", AppTheme.Purple));
             if (!string.IsNullOrWhiteSpace(result.MemoryMnemonic))
                 cogStack.Children.Add(StudioUi.CreateInfoTile("AI 高效联想巧记法 (Memory Mnemonic)", result.MemoryMnemonic, "lightbulb-on-outline", AppTheme.Amber));
             if (!string.IsNullOrWhiteSpace(result.GrammarBreakdown))
@@ -551,7 +597,7 @@ public sealed class DictionaryStudioView : UserControl
             if (result.Synonyms.Count > 0)
                 netStack.Children.Add(StudioUi.CreateInfoTile("同义替换扩展 (Synonyms)", string.Join("   ·   ", result.Synonyms), "check", AppTheme.Emerald));
             if (result.Antonyms.Count > 0)
-                netStack.Children.Add(StudioUi.CreateInfoTile("反义对比词汇 (Antonyms)", string.Join("   ·   ", result.Antonyms), "swap-horizontal", AppTheme.Danger));
+                netStack.Children.Add(StudioUi.CreateInfoTile("反义对比词汇 (Antonyms)", string.Join("   ·   ", result.Antonyms), "swap-horizontal", AppTheme.TextSecondary));
 
             rightColumn.Children.Add(StudioUi.CreateBentoCard(netStack));
         }

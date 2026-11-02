@@ -208,6 +208,12 @@ internal static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern nint SetClipboardData(uint format, nint mem);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern uint EnumClipboardFormats(uint format);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern nuint GlobalSize(nint mem);
+
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern nint GlobalAlloc(uint flags, nuint bytes);
 

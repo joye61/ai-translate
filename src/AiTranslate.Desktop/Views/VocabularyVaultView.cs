@@ -316,7 +316,7 @@ public sealed class VocabularyVaultView : UserControl
                         Spacing = 10,
                         Children =
                         {
-                            new TextBlock { Text = entry.Stage.ToString(), FontSize = 11, FontWeight = FontWeight.Bold, Foreground = stageBrush },
+                            new TextBlock { Text = UiLabels.Stage(entry.Stage), FontSize = 11, FontWeight = FontWeight.Bold, Foreground = stageBrush },
                             new TextBlock { Text = $"查词 {entry.LookupCount}x", FontSize = 11, Foreground = AppTheme.TextMuted },
                             new TextBlock { Text = $"稳定度 {entry.StabilityDays:F1}d", FontSize = 11, Foreground = AppTheme.TextMuted }
                         }
@@ -361,7 +361,7 @@ public sealed class VocabularyVaultView : UserControl
                         new TextBlock { Text = entry.Headword, FontSize = 26, FontWeight = FontWeight.Bold, Foreground = AppTheme.TextPrimary, TextWrapping = TextWrapping.Wrap },
                         new TextBlock
                         {
-                            Text = string.Join("   ", new[] { entry.UkPhonetic, entry.UsPhonetic, $"[{entry.ItemType}]", $"捕获源：{entry.CaptureSource} {entry.SourceTitle}" }.Where(s => !string.IsNullOrWhiteSpace(s))),
+                            Text = string.Join("   ", new[] { entry.UkPhonetic, entry.UsPhonetic, $"[{UiLabels.ItemType(entry.ItemType)}]", $"捕获源：{UiLabels.CaptureSource(entry.CaptureSource)} {entry.SourceTitle}" }.Where(s => !string.IsNullOrWhiteSpace(s))),
                             FontFamily = AppTheme.MonoFont,
                             FontSize = 12.5,
                             Foreground = AppTheme.TextSecondary
@@ -412,7 +412,7 @@ public sealed class VocabularyVaultView : UserControl
                     {
                         Children =
                         {
-                            BuildTelemetryChip("阶段", entry.Stage.ToString(), AppTheme.AccentBright),
+                            BuildTelemetryChip("阶段", UiLabels.Stage(entry.Stage), AppTheme.AccentBright),
                             BuildTelemetryChip("稳定度 S", $"{entry.StabilityDays:F1} 天", AppTheme.Emerald),
                             BuildTelemetryChip("难度 D", $"{entry.Difficulty:F1} / 10", AppTheme.Amber),
                             BuildTelemetryChip("记忆保持率 R", $"{retention:F0}%", AppTheme.Emerald),
@@ -440,14 +440,14 @@ public sealed class VocabularyVaultView : UserControl
         if (!string.IsNullOrWhiteSpace(entry.ContextSentence))
         {
             _inspectorPanel.Children.Add(StudioUi.CreateInfoTile(
-                $"捕获原句溯源 ({entry.CaptureSource})",
+                $"捕获原句溯源 ({UiLabels.CaptureSource(entry.CaptureSource)})",
                 $"{entry.ContextSentence}\n{entry.ContextTranslation}".Trim(),
                 "format-quote-close",
                 AppTheme.AccentBright));
         }
 
         if (!string.IsNullOrWhiteSpace(entry.EtymologyAndRoot))
-            _inspectorPanel.Children.Add(StudioUi.CreateInfoTile("词源与词根词缀基因", entry.EtymologyAndRoot, "code-braces", AppTheme.Emerald));
+            _inspectorPanel.Children.Add(StudioUi.CreateInfoTile("词源与词根词缀基因", entry.EtymologyAndRoot, "code-braces", AppTheme.Purple));
 
         if (!string.IsNullOrWhiteSpace(entry.MemoryMnemonic))
             _inspectorPanel.Children.Add(StudioUi.CreateInfoTile("AI 联想巧记助记法", entry.MemoryMnemonic, "lightbulb-on-outline", AppTheme.Amber));
@@ -529,7 +529,7 @@ public sealed class VocabularyVaultView : UserControl
     private void GradeEntry(string entryId, ReviewRating rating)
     {
         var updated = _vocabularyService.SubmitReview(entryId, rating);
-        _setStatus($"已打卡「{updated.Headword}」({rating}) → 下次复习：{updated.NextReviewAt.ToLocalTime():yyyy-MM-dd HH:mm} (稳定度 S={updated.StabilityDays:F1}d)");
+        _setStatus($"已打卡「{updated.Headword}」({UiLabels.Rating(rating)}) → 下次复习：{updated.NextReviewAt.ToLocalTime():yyyy-MM-dd HH:mm} (稳定度 S={updated.StabilityDays:F1}d)");
     }
 
     private async void ShowCreateNotebookDialogAsync()

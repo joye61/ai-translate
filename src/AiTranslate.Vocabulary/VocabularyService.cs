@@ -115,7 +115,9 @@ public sealed class VocabularyService : IVocabularyService
                 VocabularySortOrder.MostLookedUp => query.OrderByDescending(e => e.LookupCount).ThenByDescending(e => e.UpdatedAt),
                 VocabularySortOrder.HighestDifficulty => query.OrderByDescending(e => e.Difficulty).ThenBy(e => e.StabilityDays),
                 VocabularySortOrder.LowestMastery => query.OrderBy(e => e.MasteryLevel).ThenBy(e => e.StabilityDays),
-                _ => query.OrderByDescending(e => e.UpdatedAt)
+                // RecentlyAdded must reflect creation time, not last-updated time, otherwise reviewing an
+                // old entry would incorrectly bump it to the top of a "recently added" list.
+                _ => query.OrderByDescending(e => e.CreatedAt)
             };
 
             return query.ToArray();
@@ -144,7 +146,11 @@ public sealed class VocabularyService : IVocabularyService
     public VocabularyDashboardStats GetDashboardStats(DateTimeOffset? now = null)
     {
         var currentTime = now ?? DateTimeOffset.UtcNow;
-        var todayStart = new DateTimeOffset(currentTime.UtcDateTime.Date, TimeSpan.Zero);
+        // "Today" must be the user's local calendar day, not the UTC day: computing the boundary
+        // from the UTC date would misclassify reviews done late at night (or early morning, for
+        // timezones ahead of UTC) as belonging to the wrong day.
+        var localNow = currentTime.ToLocalTime();
+        var todayStart = new DateTimeOffset(localNow.Date, localNow.Offset);
         lock (_gate)
         {
             var entries = _store.Entries;
@@ -386,8 +392,20 @@ public sealed class VocabularyService : IVocabularyService
             {
                 if (string.IsNullOrWhiteSpace(entry.Headword)) continue;
                 var idx = _store.Entries.FindIndex(e => string.Equals(e.Headword, entry.Headword, StringComparison.OrdinalIgnoreCase));
-                if (idx >= 0) _store.Entries[idx] = entry;
-                else _store.Entries.Add(entry);
+                if (idx >= 0)
+                {
+                    _store.Entries[idx] = entry;
+                }
+                else
+                {
+                    // Guard against duplicate IDs: an imported entry whose Id collides with a different
+                    // existing entry (same Id, different headword) would otherwise corrupt Id-based
+                    // lookups (SaveEntry/ToggleStar/DeleteEntry/SubmitReview all match by first Id found).
+                    var toAdd = _store.Entries.Any(e => e.Id == entry.Id)
+                        ? entry with { Id = $"voc_{Guid.NewGuid():N}"[..16] }
+                        : entry;
+                    _store.Entries.Add(toAdd);
+                }
                 count++;
             }
             if (count > 0) PersistLocked();

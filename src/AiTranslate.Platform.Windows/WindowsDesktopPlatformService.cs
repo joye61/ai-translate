@@ -169,7 +169,7 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
 
             var windowTitle = GetForegroundWindowTitle();
             var cursor = GetCursorPosition();
-            var previousText = TryReadClipboardUnicodeText();
+            var clipboardSnapshot = TrySnapshotClipboard();
             var beforeSeq = NativeMethods.GetClipboardSequenceNumber();
 
             SendCtrlC();
@@ -186,8 +186,10 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
                 }
             }
 
-            if (previousText is not null && captured is not null && !string.Equals(previousText, captured, StringComparison.Ordinal))
-                TryWriteClipboardUnicodeText(previousText);
+            // Ctrl+C only mutated the clipboard if its sequence number actually changed; restore the
+            // full original snapshot (every format, not just text) so non-text content isn't lost.
+            if (clipboardSnapshot is not null && NativeMethods.GetClipboardSequenceNumber() != beforeSeq)
+                TryRestoreClipboard(clipboardSnapshot);
 
             _lastClipboardSeq = NativeMethods.GetClipboardSequenceNumber();
             if (string.IsNullOrWhiteSpace(captured))
@@ -339,6 +341,72 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
                     finally { NativeMethods.GlobalUnlock(hGlobal); }
                     if (NativeMethods.SetClipboardData(NativeMethods.CfUnicodeText, hGlobal) == 0)
                         NativeMethods.GlobalFree(hGlobal);
+                    return;
+                }
+                finally { NativeMethods.CloseClipboard(); }
+            }
+            Thread.Sleep(10);
+        }
+    }
+
+    /// <summary>Snapshots every clipboard format (not just text) so <see cref="TryRestoreClipboard"/> can put back
+    /// whatever the user actually had on the clipboard, instead of only restoring Unicode text.</summary>
+    private static List<(uint Format, byte[] Data)>? TrySnapshotClipboard()
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            if (NativeMethods.OpenClipboard(0))
+            {
+                try
+                {
+                    var snapshot = new List<(uint, byte[])>();
+                    uint format = 0;
+                    while ((format = NativeMethods.EnumClipboardFormats(format)) != 0)
+                    {
+                        var handle = NativeMethods.GetClipboardData(format);
+                        if (handle == 0) continue;
+                        var size = NativeMethods.GlobalSize(handle);
+                        if (size == 0 || size > int.MaxValue) continue;
+                        var ptr = NativeMethods.GlobalLock(handle);
+                        if (ptr == 0) continue;
+                        try
+                        {
+                            var data = new byte[(int)size];
+                            Marshal.Copy(ptr, data, 0, data.Length);
+                            snapshot.Add((format, data));
+                        }
+                        finally { NativeMethods.GlobalUnlock(handle); }
+                    }
+                    return snapshot;
+                }
+                finally { NativeMethods.CloseClipboard(); }
+            }
+            Thread.Sleep(10);
+        }
+        return null;
+    }
+
+    private static void TryRestoreClipboard(List<(uint Format, byte[] Data)> snapshot)
+    {
+        const uint GmemMoveable = 0x0002;
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            if (NativeMethods.OpenClipboard(0))
+            {
+                try
+                {
+                    NativeMethods.EmptyClipboard();
+                    foreach (var (format, data) in snapshot)
+                    {
+                        var hGlobal = NativeMethods.GlobalAlloc(GmemMoveable, (nuint)data.Length);
+                        if (hGlobal == 0) continue;
+                        var target = NativeMethods.GlobalLock(hGlobal);
+                        if (target == 0) { NativeMethods.GlobalFree(hGlobal); continue; }
+                        try { Marshal.Copy(data, 0, target, data.Length); }
+                        finally { NativeMethods.GlobalUnlock(hGlobal); }
+                        if (NativeMethods.SetClipboardData(format, hGlobal) == 0)
+                            NativeMethods.GlobalFree(hGlobal);
+                    }
                     return;
                 }
                 finally { NativeMethods.CloseClipboard(); }

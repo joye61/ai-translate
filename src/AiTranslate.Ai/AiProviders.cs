@@ -23,8 +23,13 @@ public static class AiProviders
 {
     public static IReadOnlyList<AiProviderInfo> All { get; } =
     [
+        // Only non-thinking models are offered by default: every request this app makes is a
+        // translation/dictionary lookup — a high-frequency, latency-sensitive, semantically simple
+        // task that gains nothing from a "deep reasoning" model (e.g. deepseek-reasoner), which can
+        // also not be switched out of thinking mode via the API. Advanced users can still type any
+        // custom model id in Settings.
         new("deepseek", "DeepSeek", "https://api.deepseek.com/", "https://platform.deepseek.com/api_keys",
-            [new("deepseek-chat", "DeepSeek V3 · 极速推荐"), new("deepseek-reasoner", "DeepSeek R1 · 深度推理")]),
+            [new("deepseek-chat", "DeepSeek V3 · 极速推荐")]),
         new("openai", "OpenAI", "https://api.openai.com/v1/", "https://platform.openai.com/api-keys",
             [new("gpt-4o-mini", "GPT-4o Mini · 快速"), new("gpt-4o", "GPT-4o · 旗舰")]),
         new("compatible", "OpenAI 兼容端点 (硅基流动/通义/自定义)", "https://api.siliconflow.cn/v1/", "https://platform.openai.com/docs/api-reference/chat",

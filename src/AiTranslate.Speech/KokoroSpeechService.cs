@@ -192,7 +192,9 @@ public sealed class KokoroSpeechService : ISpeechSynthesisService
         if (string.IsNullOrWhiteSpace(text)) return;
         Stop();
 
+        var previousCts = _activeSpeechCts;
         _activeSpeechCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        previousCts?.Dispose();
         var token = _activeSpeechCts.Token;
         var clampedSpeed = Math.Clamp(speed, 0.5f, 1.8f);
 
@@ -437,6 +439,7 @@ public sealed class KokoroSpeechService : ISpeechSynthesisService
         if (_disposed) return;
         _disposed = true;
         Stop();
+        _activeSpeechCts?.Dispose();
         _kokoro?.Dispose();
         _initLock.Dispose();
     }

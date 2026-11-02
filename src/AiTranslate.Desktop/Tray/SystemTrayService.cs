@@ -130,6 +130,16 @@ public sealed class SystemTrayService : IDisposable
         };
         _trayIcon.Clicked += (_, _) => onShowMainWindow();
 
+        // A TrayIcon only becomes a real OS tray icon once it is registered on the Application
+        // via the TrayIcon.Icons attached property. Without this call the icon object exists
+        // but nothing is ever shown in the system tray.
+        if (Application.Current is { } app)
+        {
+            var icons = TrayIcon.GetIcons(app) ?? new TrayIcons();
+            icons.Add(_trayIcon);
+            TrayIcon.SetIcons(app, icons);
+        }
+
         _settingsStore.Changed += OnSettingsChanged;
         _vocabularyService.Changed += OnVocabularyChanged;
         RefreshTrayStates();
@@ -196,6 +206,8 @@ public sealed class SystemTrayService : IDisposable
         _disposed = true;
         _settingsStore.Changed -= OnSettingsChanged;
         _vocabularyService.Changed -= OnVocabularyChanged;
+        if (Application.Current is { } app && TrayIcon.GetIcons(app) is { } icons)
+            icons.Remove(_trayIcon);
         _trayIcon.IsVisible = false;
         _trayIcon.Dispose();
     }

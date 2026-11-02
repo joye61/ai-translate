@@ -35,6 +35,15 @@ public static class TranslationLanguages
     public static TranslationLanguage Get(string id) =>
         All.FirstOrDefault(language => string.Equals(language.Id, id, StringComparison.OrdinalIgnoreCase))
         ?? throw new AiException("不支持此翻译语言，请重新选择。");
+
+    /// <summary>
+    /// Resolves a language id the same way as <see cref="Get"/>, but falls back to the default
+    /// language instead of throwing. Use this when initializing UI from persisted settings, where
+    /// a corrupted/stale/unsupported id must not crash window construction.
+    /// </summary>
+    public static TranslationLanguage GetOrDefault(string? id) =>
+        (id is not null ? All.FirstOrDefault(language => string.Equals(language.Id, id, StringComparison.OrdinalIgnoreCase)) : null)
+        ?? All.First(language => language.Id == DefaultId);
 }
 
 /// <summary>

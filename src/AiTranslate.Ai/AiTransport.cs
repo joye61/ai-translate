@@ -48,6 +48,26 @@ public sealed class AiTransport(AiProviderConfig config, HttpClient? client = nu
             body["max_completion_tokens"] = 8192;
         }
 
+        // Every request in this app is a translation or dictionary lookup: a high-frequency,
+        // latency-sensitive, semantically simple task. Extended "thinking"/reasoning only adds
+        // cost and delay here, so explicitly request the fastest non-thinking mode whenever the
+        // selected model is known to support such a toggle. Models that don't recognize the field
+        // are left untouched so this never breaks a plain chat model's request.
+        if (provider.Id == "openai" && IsGpt5ReasoningModel(modelId))
+        {
+            // "minimal" is only a valid reasoning_effort value for the GPT-5 family; the o-series
+            // models (o1/o3/o4-mini) reject it outright and only accept low/medium/high.
+            body["reasoning_effort"] = "minimal";
+        }
+        else if (provider.Id == "openai" && IsOSeriesReasoningModel(modelId))
+        {
+            body["reasoning_effort"] = "low";
+        }
+        else if (AiProviders.IsCompatible(provider.Id) && IsHybridThinkingModel(modelId))
+        {
+            body["enable_thinking"] = false;
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Post, provider.BaseUrl + "chat/completions");
         if (!string.IsNullOrWhiteSpace(config.ApiKey))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.ApiKey.Trim());
@@ -120,6 +140,41 @@ public sealed class AiTransport(AiProviderConfig config, HttpClient? client = nu
         var resultCalls = calls.Values.Select(c => new AiToolCall(c.Id.ToString(), c.Name.ToString(), c.Args.ToString())).ToArray();
         return new(text.ToString(), resultCalls, input, output);
     }
+
+    /// <summary>
+    /// The GPT-5 family (excluding the non-reasoning "gpt-5-chat" variant). This is the only family
+    /// for which OpenAI's unified "reasoning_effort" accepts the value "minimal".
+    /// </summary>
+    private static bool IsGpt5ReasoningModel(string modelId) =>
+        modelId.Contains("gpt-5", StringComparison.OrdinalIgnoreCase)
+            && !modelId.Contains("chat", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// OpenAI's o-series reasoning models (o1/o3/o4), excluding "o1-mini"/"o1-preview" which never
+    /// accepted "reasoning_effort" at all and return an error for it. Unlike GPT-5, this family only
+    /// accepts low/medium/high for "reasoning_effort" — "minimal" is rejected outright.
+    /// </summary>
+    private static bool IsOSeriesReasoningModel(string modelId) =>
+        (modelId.StartsWith("o1", StringComparison.OrdinalIgnoreCase)
+            && !modelId.Contains("mini", StringComparison.OrdinalIgnoreCase)
+            && !modelId.Contains("preview", StringComparison.OrdinalIgnoreCase)) ||
+        modelId.StartsWith("o3", StringComparison.OrdinalIgnoreCase) ||
+        modelId.StartsWith("o4", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Hybrid-thinking OpenAI-compatible models that accept an "enable_thinking" toggle (Qwen3, GLM, etc.).
+    /// "kimi-k2-thinking" is intentionally NOT included: unlike the others, it is a dedicated always-thinking
+    /// model (as opposed to the separate non-thinking "kimi-k2"/"kimi-k2-turbo" model ids) with no documented
+    /// on/off switch, so a user who explicitly selects it wants reasoning and the field would be meaningless
+    /// (or rejected) rather than toggling anything.
+    /// </summary>
+    private static bool IsHybridThinkingModel(string modelId) =>
+        modelId.Contains("qwen3", StringComparison.OrdinalIgnoreCase) ||
+        modelId.Contains("qwq", StringComparison.OrdinalIgnoreCase) ||
+        modelId.Contains("glm-4.5", StringComparison.OrdinalIgnoreCase) ||
+        modelId.Contains("glm-4.6", StringComparison.OrdinalIgnoreCase) ||
+        modelId.Contains("hunyuan-a", StringComparison.OrdinalIgnoreCase) ||
+        modelId.Contains("deepseek-v3.1", StringComparison.OrdinalIgnoreCase);
 
     private static AiException InvalidChunk() => new("模型返回格式异常，请重试或更换模型。");
     private static JsonDocument ParseChunk(string data)

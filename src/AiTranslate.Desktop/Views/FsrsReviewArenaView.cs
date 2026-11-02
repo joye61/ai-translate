@@ -183,7 +183,7 @@ public sealed class FsrsReviewArenaView : UserControl
         }
 
         var entry = _queue[_currentIndex];
-        _progressText.Text = $"训练进度：{_currentIndex + 1} / {_queue.Count}   ·   阶段：{entry.Stage} (稳定度 S={entry.StabilityDays:F1}d)";
+        _progressText.Text = $"训练进度：{_currentIndex + 1} / {_queue.Count}   ·   阶段：{UiLabels.Stage(entry.Stage)} (稳定度 S={entry.StabilityDays:F1}d)";
 
         var modeIndex = Math.Clamp(_modeCombo.SelectedIndex, 0, 3);
         var mode = modeIndex >= 2 ? ReviewQuizMode.SpellingDictation : (ReviewQuizMode)modeIndex;
@@ -320,7 +320,7 @@ public sealed class FsrsReviewArenaView : UserControl
                 TextWrapping = TextWrapping.Wrap
             });
             if (!string.IsNullOrWhiteSpace(entry.EtymologyAndRoot))
-                cardStack.Children.Add(StudioUi.CreateInfoTile("词源与词根拆解", entry.EtymologyAndRoot, "code-braces", AppTheme.Emerald));
+                cardStack.Children.Add(StudioUi.CreateInfoTile("词源与词根拆解", entry.EtymologyAndRoot, "code-braces", AppTheme.Purple));
             if (!string.IsNullOrWhiteSpace(entry.MemoryMnemonic))
                 cardStack.Children.Add(StudioUi.CreateInfoTile("AI 联想助记", entry.MemoryMnemonic, "lightbulb-on-outline", AppTheme.Amber));
 
@@ -335,7 +335,7 @@ public sealed class FsrsReviewArenaView : UserControl
             void Submit(ReviewRating r)
             {
                 var updated = _vocabularyService.SubmitReview(entry.Id, r, mode);
-                _setStatus($"已记录「{updated.Headword}」反馈 ({r}) · 下次复习间隔已更新");
+                _setStatus($"已记录「{updated.Headword}」反馈 ({UiLabels.Rating(r)}) · 下次复习间隔已更新");
                 _currentIndex++;
                 _answerRevealed = false;
                 RenderCard();

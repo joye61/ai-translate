@@ -13,6 +13,7 @@ internal sealed class HotkeyPumpThread : IDisposable
     private readonly object _gate = new();
     private readonly ConcurrentQueue<Command> _commands = new();
     private readonly Dictionary<int, Action> _callbacks = [];
+    private readonly Dictionary<int, (uint Modifiers, uint Key)> _registered = [];
     private readonly TaskCompletionSource<uint> _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly AutoResetEvent _workSignal = new(false);
@@ -37,16 +38,22 @@ internal sealed class HotkeyPumpThread : IDisposable
         }
         var command = new Command(() =>
         {
-            if (_callbacks.ContainsKey(id))
+            var hadPrevious = _registered.TryGetValue(id, out var previous);
+            if (hadPrevious)
                 NativeMethods.UnregisterHotKey(0, id);
 
-            if (!NativeMethods.RegisterHotKey(0, id, (uint)gesture.Modifiers | NativeMethods.ModNoRepeat, key))
+            var modifiers = (uint)gesture.Modifiers | NativeMethods.ModNoRepeat;
+            if (!NativeMethods.RegisterHotKey(0, id, modifiers, key))
             {
                 var code = Marshal.GetLastWin32Error();
+                // Roll back so a failed rebind doesn't silently leave a previously working hotkey unregistered.
+                if (hadPrevious)
+                    NativeMethods.RegisterHotKey(0, id, previous.Modifiers, previous.Key);
                 return new(false, code == NativeMethods.ErrorHotkeyAlreadyRegistered
                     ? $"快捷键 {gesture} 已被其他软件占用。"
                     : $"无法注册快捷键：{new Win32Exception(code).Message}");
             }
+            _registered[id] = (modifiers, key);
             _callbacks[id] = callback;
             return new(true, null);
         });
@@ -65,6 +72,7 @@ internal sealed class HotkeyPumpThread : IDisposable
     {
         var command = new Command(() =>
         {
+            _registered.Remove(id);
             if (_callbacks.Remove(id))
                 NativeMethods.UnregisterHotKey(0, id);
             return new(true, null);
@@ -117,6 +125,7 @@ internal sealed class HotkeyPumpThread : IDisposable
             foreach (var id in _callbacks.Keys)
                 NativeMethods.UnregisterHotKey(0, id);
             _callbacks.Clear();
+            _registered.Clear();
             lock (_gate)
             {
                 while (_commands.TryDequeue(out var cmd))

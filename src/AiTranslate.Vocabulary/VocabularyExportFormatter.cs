@@ -57,7 +57,7 @@ internal static class VocabularyExportFormatter
               .Append(Clean(item.UsPhonetic)).Append('\t')
               .Append(Clean(item.MemoryMnemonic)).Append('\t')
               .Append(Clean(example)).Append('\t')
-              .AppendLine(string.Join(" ", item.Tags));
+              .AppendLine(Clean(string.Join(" ", item.Tags)));
         }
         return sb.ToString();
     }

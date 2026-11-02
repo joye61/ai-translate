@@ -18,6 +18,10 @@ public sealed class MacDesktopPlatformService : IDesktopPlatformService
     private string _lastClipboardText = "";
     private volatile bool _suppressClipboardEvents;
     private int _disposed;
+    private bool _wasLeftButtonDown;
+    private PointD _mouseDownPos;
+    private DateTimeOffset _mouseDownTime;
+    private int _selectionCaptureInFlight;
 
     public string Name => "macOS";
 
@@ -54,7 +58,17 @@ public sealed class MacDesktopPlatformService : IDesktopPlatformService
         return [new DisplayInfo("mac-main", "Primary Display", new RectD(0, 0, 1920, 1080), 1920, 1080, 2.0, true)];
     }
 
-    public PointD GetCursorPosition() => new(400, 300);
+    public PointD GetCursorPosition()
+    {
+        var evt = CGEventCreate(0);
+        if (evt == 0) return new PointD(0, 0);
+        try
+        {
+            var point = CGEventGetLocation(evt);
+            return new PointD(point.X, point.Y);
+        }
+        finally { CFRelease(evt); }
+    }
 
     public IReadOnlyList<WindowInfo> GetWindows() => [];
 
@@ -118,6 +132,9 @@ public sealed class MacDesktopPlatformService : IDesktopPlatformService
 
     public async Task<CapturedTextEvent?> TryCaptureSelectedTextAsync(CancellationToken cancellationToken = default)
     {
+        if (Interlocked.CompareExchange(ref _selectionCaptureInFlight, 1, 0) != 0)
+            return null;
+
         _suppressClipboardEvents = true;
         try
         {
@@ -138,19 +155,57 @@ public sealed class MacDesktopPlatformService : IDesktopPlatformService
         finally
         {
             _suppressClipboardEvents = false;
+            Interlocked.Exchange(ref _selectionCaptureInFlight, 0);
         }
     }
 
     private void OnMonitorTick(object? state)
     {
-        if (Volatile.Read(ref _disposed) != 0 || !IsClipboardMonitoringEnabled || _suppressClipboardEvents) return;
+        if (Volatile.Read(ref _disposed) != 0) return;
         try
         {
-            var text = ReadPbpaste()?.Trim();
-            if (!string.IsNullOrWhiteSpace(text) && text.Length <= 8000 && !string.Equals(text, _lastClipboardText, StringComparison.Ordinal))
+            if (IsClipboardMonitoringEnabled && !_suppressClipboardEvents)
             {
-                _lastClipboardText = text;
-                ClipboardTextChanged?.Invoke(this, new CapturedTextEvent(text, TranslationTriggerSource.ClipboardMonitor, GetCursorPosition(), GetForegroundWindowTitle()));
+                var text = ReadPbpaste()?.Trim();
+                if (!string.IsNullOrWhiteSpace(text) && text.Length <= 8000 && !string.Equals(text, _lastClipboardText, StringComparison.Ordinal))
+                {
+                    _lastClipboardText = text;
+                    ClipboardTextChanged?.Invoke(this, new CapturedTextEvent(text, TranslationTriggerSource.ClipboardMonitor, GetCursorPosition(), GetForegroundWindowTitle()));
+                }
+            }
+
+            if (IsMouseSelectionMonitoringEnabled && Volatile.Read(ref _selectionCaptureInFlight) == 0)
+            {
+                const int kCGEventSourceStateHidSystemState = 1;
+                const int kCGMouseButtonLeft = 0;
+                var isDown = CGEventSourceButtonState(kCGEventSourceStateHidSystemState, kCGMouseButtonLeft);
+                if (isDown && !_wasLeftButtonDown)
+                {
+                    _wasLeftButtonDown = true;
+                    _mouseDownPos = GetCursorPosition();
+                    _mouseDownTime = DateTimeOffset.UtcNow;
+                }
+                else if (!isDown && _wasLeftButtonDown)
+                {
+                    _wasLeftButtonDown = false;
+                    var upPos = GetCursorPosition();
+                    var durationMs = (DateTimeOffset.UtcNow - _mouseDownTime).TotalMilliseconds;
+                    var dx = Math.Abs(upPos.X - _mouseDownPos.X);
+                    var dy = Math.Abs(upPos.Y - _mouseDownPos.Y);
+                    if (durationMs is >= 140 and <= 8000 && dx >= 18 && dy <= 240)
+                    {
+                        _ = Task.Run(async () =>
+                        {
+                            var captured = await TryCaptureSelectedTextAsync().ConfigureAwait(false);
+                            if (captured is not null && !string.IsNullOrWhiteSpace(captured.Text))
+                                RaiseMouseSelection(captured);
+                        });
+                    }
+                }
+            }
+            else
+            {
+                _wasLeftButtonDown = false;
             }
         }
         catch
@@ -209,4 +264,20 @@ public sealed class MacDesktopPlatformService : IDesktopPlatformService
 
     [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
     private static extern nuint CGDisplayPixelsHigh(uint display);
+
+    [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
+    private static extern nint CGEventCreate(nint source);
+
+    [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
+    private static extern CGPoint CGEventGetLocation(nint @event);
+
+    [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
+    [return: MarshalAs(UnmanagedType.I1)]
+    private static extern bool CGEventSourceButtonState(int stateId, int button);
+
+    [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
+    private static extern void CFRelease(nint cf);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CGPoint { internal double X, Y; }
 }

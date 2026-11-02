@@ -110,6 +110,7 @@ public sealed class AiDictionaryService(Func<IAiTransport?> transportFactory) : 
         {
             using var doc = JsonDocument.Parse(jsonText);
             var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) throw new JsonException("Dictionary response root is not a JSON object.");
 
             var primary = GetString(root, "primaryTranslation");
             if (string.IsNullOrWhiteSpace(primary)) primary = sourceText;
@@ -127,6 +128,7 @@ public sealed class AiDictionaryService(Func<IAiTransport?> transportFactory) : 
             {
                 foreach (var item in sensesEl.EnumerateArray())
                 {
+                    if (item.ValueKind != JsonValueKind.Object) continue;
                     var pos = GetString(item, "partOfSpeech");
                     var zh = GetString(item, "definitionZh");
                     var en = GetString(item, "definitionEn");
@@ -140,6 +142,7 @@ public sealed class AiDictionaryService(Func<IAiTransport?> transportFactory) : 
             {
                 foreach (var item in infEl.EnumerateArray())
                 {
+                    if (item.ValueKind != JsonValueKind.Object) continue;
                     var label = GetString(item, "label");
                     var val = GetString(item, "value");
                     if (!string.IsNullOrWhiteSpace(label) && !string.IsNullOrWhiteSpace(val))
@@ -152,6 +155,7 @@ public sealed class AiDictionaryService(Func<IAiTransport?> transportFactory) : 
             {
                 foreach (var item in colEl.EnumerateArray())
                 {
+                    if (item.ValueKind != JsonValueKind.Object) continue;
                     var phrase = GetString(item, "phrase");
                     var meaning = GetString(item, "meaning");
                     if (!string.IsNullOrWhiteSpace(phrase))
@@ -164,6 +168,7 @@ public sealed class AiDictionaryService(Func<IAiTransport?> transportFactory) : 
             {
                 foreach (var item in exEl.EnumerateArray())
                 {
+                    if (item.ValueKind != JsonValueKind.Object) continue;
                     var src = GetString(item, "sourceSentence");
                     var tr = GetString(item, "translatedSentence");
                     var hl = GetString(item, "highlightTerm");
@@ -200,7 +205,9 @@ public sealed class AiDictionaryService(Func<IAiTransport?> transportFactory) : 
             return new DictionaryEntryResult
             {
                 SourceText = sourceText,
-                PrimaryTranslation = rawResponse.Trim(),
+                // Use the fence-stripped text, not the raw response: otherwise a ```json fence around
+                // malformed JSON leaks into the user-facing fallback "translation".
+                PrimaryTranslation = jsonText,
                 TargetLanguage = targetLanguageId,
                 ItemType = CountWords(sourceText) <= 3 ? VocabularyItemType.Word : VocabularyItemType.Sentence
             };

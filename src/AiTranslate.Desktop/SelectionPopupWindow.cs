@@ -342,6 +342,14 @@ public sealed class SelectionPopupWindow : Window
         }
     }
 
+    protected override void OnClosed(EventArgs e)
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+        base.OnClosed(e);
+    }
+
     private void AddCurrentToVocabulary()
     {
         if (_currentResult is null) return;
@@ -365,7 +373,18 @@ public sealed class SelectionPopupWindow : Window
     {
         var x = (int)cursor.X + 14;
         var y = (int)cursor.Y + 18;
-        Position = new PixelPoint(Math.Max(16, x), Math.Max(16, y));
+
+        // Clamp against the bounds of the monitor the cursor is actually on, not a hardcoded (0,0)-based
+        // minimum: secondary monitors placed above/left of the primary have negative origin coordinates,
+        // so Math.Max(16, ...) against a global floor would yank the popup onto the wrong monitor.
+        var bounds = Screens?.ScreenFromPoint(new PixelPoint((int)cursor.X, (int)cursor.Y))?.WorkingArea;
+        if (bounds is { } area)
+        {
+            x = Math.Clamp(x, area.X + 8, Math.Max(area.X + 8, area.Right - 8));
+            y = Math.Clamp(y, area.Y + 8, Math.Max(area.Y + 8, area.Bottom - 8));
+        }
+
+        Position = new PixelPoint(x, y);
     }
 
     private static Button CreateIconButton(string icon, string tooltip, Action onClick)
