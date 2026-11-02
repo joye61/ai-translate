@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../AiTranslate.Core/AiTranslate.Core.csproj" />
+    <PackageReference Include="KokoroSharp" Version="0.6.7" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
+  </ItemGroup>
+</Project>

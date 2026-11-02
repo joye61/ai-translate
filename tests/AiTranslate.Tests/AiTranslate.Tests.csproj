@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/AiTranslate.Core/AiTranslate.Core.csproj" />
+    <ProjectReference Include="../../src/AiTranslate.Ai/AiTranslate.Ai.csproj" />
+    <ProjectReference Include="../../src/AiTranslate.Ocr/AiTranslate.Ocr.csproj" />
+    <ProjectReference Include="../../src/AiTranslate.Speech/AiTranslate.Speech.csproj" />
+    <ProjectReference Include="../../src/AiTranslate.Vocabulary/AiTranslate.Vocabulary.csproj" />
+    <ProjectReference Include="../../src/AiTranslate.Desktop/AiTranslate.Desktop.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+</Project>

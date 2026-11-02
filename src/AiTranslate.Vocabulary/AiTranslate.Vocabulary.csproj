@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../AiTranslate.Core/AiTranslate.Core.csproj" />
+    <ProjectReference Include="../AiTranslate.Ai/AiTranslate.Ai.csproj" />
+  </ItemGroup>
+</Project>

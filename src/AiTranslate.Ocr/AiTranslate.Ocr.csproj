@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../AiTranslate.Core/AiTranslate.Core.csproj" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
+    <PackageReference Include="Clipper2" Version="2.0.0" />
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.4" />
+    <Content Include="Models/**" TargetPath="OcrModels/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Vendor/RapidOcrNet/LICENSE.txt;Vendor/RapidOcrNet/NOTICE.txt;Vendor/RapidOcrNet/README.md"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CheckBundledOcrModels" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)/Models/det.onnx') or !Exists('$(MSBuildProjectDirectory)/Models/rec.onnx') or !Exists('$(MSBuildProjectDirectory)/Models/keys.txt')"
+           Text="Bundled OCR assets are missing in src/AiTranslate.Ocr/Models." />
+  </Target>
+</Project>

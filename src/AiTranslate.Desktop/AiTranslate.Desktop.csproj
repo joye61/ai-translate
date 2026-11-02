@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AiTranslate.Core/AiTranslate.Core.csproj" />
+    <ProjectReference Include="../AiTranslate.Ai/AiTranslate.Ai.csproj" />
+    <ProjectReference Include="../AiTranslate.Ocr/AiTranslate.Ocr.csproj" />
+    <ProjectReference Include="../AiTranslate.Speech/AiTranslate.Speech.csproj" />
+    <ProjectReference Include="../AiTranslate.Vocabulary/AiTranslate.Vocabulary.csproj" />
+    <ProjectReference Include="../AiTranslate.Platform.Windows/AiTranslate.Platform.Windows.csproj" />
+    <ProjectReference Include="../AiTranslate.Platform.MacOS/AiTranslate.Platform.MacOS.csproj" />
+    <ProjectReference Include="../AiTranslate.Platform.Linux/AiTranslate.Platform.Linux.csproj" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.4" />
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <InternalsVisibleTo Include="AiTranslate.Tests" />
+  </ItemGroup>
+</Project>
