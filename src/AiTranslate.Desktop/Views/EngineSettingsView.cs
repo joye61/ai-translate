@@ -3,6 +3,7 @@ using AiTranslate.Desktop.Controls;
 using AiTranslate.Speech;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
 
@@ -35,6 +36,13 @@ public sealed class EngineSettingsView : UserControl
         _setStatus = setStatus;
 
         var current = _settingsStore.Current;
+        var readerLanguage = new ComboBox
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ItemsSource = TranslationLanguages.All,
+            ItemTemplate = new FuncDataTemplate<TranslationLanguage>((language, _) => TextStyles.Create(language!.DisplayName, TextRole.Body)),
+            SelectedItem = DictionaryTranslationDirection.ReaderLanguage(current.DictionaryReaderLanguage)
+        };
 
         _providerCombo = new ComboBox
         {
@@ -128,6 +136,7 @@ public sealed class EngineSettingsView : UserControl
                 ModelId = string.IsNullOrWhiteSpace(_modelIdBox.Text) ? "deepseek-chat" : _modelIdBox.Text.Trim(),
                 CustomBaseUrl = string.IsNullOrWhiteSpace(_baseUrlBox.Text) ? provider.BaseUrl : _baseUrlBox.Text.Trim(),
                 ApiKey = _apiKeyBox.Text?.Trim() ?? "",
+                DictionaryReaderLanguage = (readerLanguage.SelectedItem as TranslationLanguage)?.Id,
                 AutoAddLookedUpWordsToNotebook = _autoAddWordCheck.IsChecked == true,
                 PreferredUsVoiceId = usVoice,
                 PreferredUkVoiceId = ukVoice,
@@ -160,6 +169,7 @@ public sealed class EngineSettingsView : UserControl
                 Field("接口地址 Base URL", _baseUrlBox),
                 Field("模型 Model ID", _modelIdBox),
                 Field("API Key", _apiKeyBox),
+                Field("我的母语（释义与译法辨析）", readerLanguage),
                 _autoAddWordCheck,
                 saveBtn
             }

@@ -23,7 +23,7 @@ public sealed class SelectionPopupWindow : Window
     private readonly IVocabularyService _vocabularyService;
     private readonly ISpeechSynthesisService _speechService;
     private readonly AppSettingsStore _settings;
-    private readonly Action<DictionaryEntryResult, CapturedTextEvent> _onExpandToMain;
+    private readonly Action<DictionaryEntryResult, CapturedTextEvent, string?, string?> _onExpandToMain;
 
     private readonly TextBlock _headwordText;
     private readonly ScrollViewer _bodyHost;
@@ -39,7 +39,7 @@ public sealed class SelectionPopupWindow : Window
         IVocabularyService vocabularyService,
         ISpeechSynthesisService speechService,
         AppSettingsStore settings,
-        Action<DictionaryEntryResult, CapturedTextEvent> onExpandToMain)
+        Action<DictionaryEntryResult, CapturedTextEvent, string?, string?> onExpandToMain)
     {
         _dictionaryService = dictionaryService;
         _vocabularyService = vocabularyService;
@@ -78,14 +78,7 @@ public sealed class SelectionPopupWindow : Window
             RefreshBookmark();
         });
 
-        var expandBtn = CreateIconButton("book-open-variant", "在主界面深度打开", () =>
-        {
-            if (_currentResult is not null && _currentCapture is not null)
-            {
-                Hide();
-                _onExpandToMain(_currentResult, _currentCapture);
-            }
-        });
+        var expandBtn = CreateIconButton("book-open-variant", "在主界面深度打开", () => Expand(null, null));
 
         var copyBtn = CreateIconButton("content-copy", "复制译文", async () =>
         {
@@ -208,7 +201,7 @@ public sealed class SelectionPopupWindow : Window
         };
         ToolTip.SetTip(_sourceTagText, null);
         _headwordText.Text = captured.Text;
-        var body = new SelectionPopupBody(_speechService, _settings);
+        var body = new SelectionPopupBody(_speechService, _settings, Expand);
         _bodyHost.Content = body;
         _bodyHost.ScrollToHome();
 
@@ -258,6 +251,13 @@ public sealed class SelectionPopupWindow : Window
         {
             if (_cts == request) _cts = null;
         }
+    }
+
+    private void Expand(string? translation, string? context)
+    {
+        if (_currentResult is null || _currentCapture is null) return;
+        Hide();
+        _onExpandToMain(_currentResult, _currentCapture, translation, context);
     }
 
     private void ShowResult(DictionaryEntryResult result, SelectionPopupBody body)

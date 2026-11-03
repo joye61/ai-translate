@@ -17,6 +17,7 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
     private readonly List<Mark> _marks = [];
     private readonly Action<string, string> _lookup;
     private readonly string _original;
+    private readonly bool _standaloneTerms;
     private Mark? _pressed;
 
     public bool HasLinkedTerms => _marks.Any(mark => mark.Term is not null);
@@ -33,10 +34,23 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
     ];
     protected override Type StyleKeyOverride => typeof(SelectableTextBlock);
 
+    internal static DictionaryReadingText Primary(DictionaryEntryResult entry, Action<string, string> lookup)
+    {
+        var passage = entry.ItemType.IsPassage();
+        var text = entry.PrimaryTranslation;
+        var options = entry.TranslationOptions.Select(o => o.Text).ToArray();
+        var terms = passage
+            ? entry.Collocations.Select(c => c.Meaning).Append(text)
+            : options.Concat(entry.PrimaryRenderings());
+        return TextStyles.Apply(new DictionaryReadingText(text, lookup, terms, standaloneTerms: !passage) { Background = Brushes.Transparent },
+            passage ? TextRole.PassageTranslation : TextRole.Translation);
+    }
+
     public DictionaryReadingText(string text, Action<string, string> lookup, IEnumerable<string> terms,
-        IEnumerable<GrammarHighlight>? grammar = null, IBrush? termForeground = null)
+        IEnumerable<GrammarHighlight>? grammar = null, IBrush? termForeground = null, bool standaloneTerms = false)
     {
         _original = text;
+        _standaloneTerms = standaloneTerms;
         _lookup = lookup;
         TextWrapping = TextWrapping.Wrap;
         LineHeight = 23;
@@ -46,13 +60,26 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
             var at = DictionaryTextMatch.IndexOf(text, highlight.Quote, comparison: StringComparison.Ordinal);
             if (at >= 0) _marks.Add(new(at, at + highlight.Quote.Length, null, $"{highlight.Label} · {highlight.Explanation}"));
         }
-        foreach (var term in terms.Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var term in terms.Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.Ordinal).OrderByDescending(t => t.Length))
         {
-            if (string.IsNullOrWhiteSpace(term)) continue;
-            var at = DictionaryTextMatch.IndexOf(text, term);
-            if (at >= 0) _marks.Add(new(at, at + term.Length, text.Substring(at, term.Length)));
+            var start = 0;
+            while (start < text.Length)
+            {
+                var at = DictionaryTextMatch.IndexOf(text, term, start,
+                    standaloneTerms ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
+                if (at < 0) break;
+                start = at + term.Length;
+                if (!standaloneTerms || !_marks.Any(m => m.Start <= at && start <= m.End))
+                    _marks.Add(new(at, start, text.Substring(at, term.Length)));
+                if (!standaloneTerms) break;
+            }
         }
         if (_marks.Count == 0) Text = text;
+        else if (_marks.Count == 1 && _marks[0].Term == text && termForeground is null)
+        {
+            Text = text;
+            TextDecorations = LinkUnderline();
+        }
         else
         {
             // Split at both kinds of boundaries: a clickable word can lie inside a longer grammar span.
@@ -143,6 +170,6 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
         _pressed = null;
         base.OnPointerReleased(e);
         if (pressed?.Term is { } term && SelectionStart == SelectionEnd && TermAt(HitIndex(e)) == pressed)
-            _lookup(term, SentenceAt(_original, pressed.Start, term.Length));
+            _lookup(term, _standaloneTerms || term == _original ? "" : SentenceAt(_original, pressed.Start, term.Length));
     }
 }

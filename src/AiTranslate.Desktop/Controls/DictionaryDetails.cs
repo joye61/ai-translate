@@ -75,10 +75,16 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 Custom(spec, entry.KeyPoints, () => DictionaryInsightBlocks.KeyPoints(entry.KeyPoints));
                 break;
             case EntryBlock.Variants:
-                Custom(spec, entry.Variants, () => DictionaryInsightBlocks.Variants(entry.Variants, passage, _finished is null ? null : Copy));
+                Custom(spec, entry.Variants, () => DictionaryInsightBlocks.Variants(entry.Variants, passage,
+                    _finished is null ? null : Copy, _finished is null ? null : LookupTranslation));
+                break;
+            case EntryBlock.TranslationOptions:
+                Custom(spec, entry.TranslationOptions, () => DictionaryInsightBlocks.Options(entry.TranslationOptions,
+                    _finished is null ? null : LookupTranslation));
                 break;
             case EntryBlock.Decisions:
-                Custom(spec, entry.TranslationDecisions, () => DictionaryInsightBlocks.Decisions(entry.TranslationDecisions));
+                Custom(spec, entry.TranslationDecisions, () => DictionaryInsightBlocks.Decisions(entry.TranslationDecisions,
+                    _finished is null ? null : LookupTranslation));
                 break;
             case EntryBlock.Structure:
                 Custom(spec, entry.Clauses, () => DictionaryInsightBlocks.Structure(entry.Clauses));
@@ -171,6 +177,8 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
         : TextStyles.Selectable(text, TextRole.PassageTranslation);
 
     private void Copy(string text) => _ = TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(text);
+
+    private void LookupTranslation(string text) => lookup(text, "", true);
 
     private static IEnumerable<(string Label, string Value)> SenseFields(PartOfSpeechSense sense) =>
         new[] { ("场景", sense.Scenario), ("用法", sense.GrammarPattern) }.Where(f => !string.IsNullOrWhiteSpace(f.Item2) &&

@@ -98,6 +98,7 @@ public sealed partial class VocabularyService
         CommonMistakes = result.CommonMistakes,
         WordChoice = result.WordChoice,
         UsageContrasts = result.UsageContrasts,
+        TranslationOptions = result.TranslationOptions,
         Variants = result.Variants,
         KeyPoints = result.KeyPoints,
         Alignment = result.Alignment,

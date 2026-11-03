@@ -16,7 +16,7 @@ public sealed partial class VocabularyVaultView : UserControl
     private readonly IVocabularyService _service;
     private readonly ISpeechSynthesisService _speech;
     private readonly AppSettingsStore _settings;
-    private readonly Action<string, string?, TranslationTriggerSource, string> _lookup;
+    private readonly Action<string, string?, TranslationTriggerSource, string, string> _lookup;
     private readonly Action<string> _setStatus;
     private readonly NotebookShelf _shelf;
     private readonly VocabularyFilters _filters;
@@ -34,7 +34,7 @@ public sealed partial class VocabularyVaultView : UserControl
     internal Control Toolbar { get; } = TextStyles.Create("生词本", TextRole.PageTitle);
 
     public VocabularyVaultView(IVocabularyService vocabularyService, ISpeechSynthesisService speechService,
-        AppSettingsStore settingsStore, Action<string, string?, TranslationTriggerSource, string> onLookupInStudio,
+        AppSettingsStore settingsStore, Action<string, string?, TranslationTriggerSource, string, string> onLookupInStudio,
         Action<string?> onCollect, Action<string> onSwitchToReview, Action<string> setStatus)
     {
         _service = vocabularyService;

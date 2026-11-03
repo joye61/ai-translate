@@ -68,7 +68,7 @@ public sealed class NotebookManagementTests
                 using var speech = new KokoroSpeechService(directory.FullName);
                 string? collectId = null, reviewId = null;
                 var view = new VocabularyVaultView(service, speech, new AppSettingsStore(Path.Combine(directory.FullName, "settings.json")),
-                    (_, _, _, _) => { }, id => collectId = id, id => reviewId = id, _ => { });
+                    (_, _, _, _, _) => { }, id => collectId = id, id => reviewId = id, _ => { });
                 // MainWindow's minimum workspace after its 232 DIP navigation and title/status bars.
                 var window = new Window { Width = 788, Height = 560, Content = view };
                 window.Show();

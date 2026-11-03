@@ -1,5 +1,8 @@
 namespace AiTranslate.Core;
 
+/// <summary>A target-language rendering with its meaning and selection criteria in the reader's language.</summary>
+public sealed record TranslationOption(string Text, string Meaning, string Usage);
+
 /// <summary>An alternative rendering of the whole source in a distinct style (直译 / 意译 / 口语 / 正式 …).</summary>
 public sealed record TranslationVariant(string Style, string Text, string Note = "");
 

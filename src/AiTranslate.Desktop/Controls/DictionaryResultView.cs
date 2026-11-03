@@ -317,12 +317,7 @@ internal sealed class DictionaryResultView : StackPanel
         _details.ShowEntry(entry, complete);
         if (complete)
         {
-            var translatedTerms = entry.Collocations.Select(c => c.Meaning).Concat(entry.Senses.Select(s => s.DefinitionZh));
-            var reading = new DictionaryReadingText(entry.PrimaryTranslation, (q, context) => _lookup(q, context, true), translatedTerms)
-            {
-                FontSize = _translation.FontSize, LineHeight = _translation.LineHeight, FontWeight = _translation.FontWeight,
-                Foreground = _translation.Foreground
-            };
+            var reading = DictionaryReadingText.Primary(entry, (q, context) => _lookup(q, context, true));
             _translationHost.Child = reading;
             _readingHintText.Text = reading.HasLinkedTerms || entry.Collocations.Count > 0 || entry.GlossaryReferences.Count > 0
                 ? "点击下划线表达可继续查词 · 选中文字右键可查询" : "选中译文文字后右键即可查词";

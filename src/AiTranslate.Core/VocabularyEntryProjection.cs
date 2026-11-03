@@ -38,6 +38,7 @@ public static class VocabularyEntryProjection
             .Where(c => DictionaryTextMatch.IndexOf(entry.Headword, c.Quote, comparison: StringComparison.Ordinal) >= 0).ToArray(),
         Alignment = entry.Alignment
             .Where(a => DictionaryTextMatch.IndexOf(entry.Headword, a.Source, comparison: StringComparison.Ordinal) >= 0).ToArray(),
+        TranslationOptions = entry.TranslationOptions,
         Variants = entry.Variants,
         KeyPoints = entry.KeyPoints,
         Tone = entry.Tone,

@@ -10,6 +10,17 @@ public static class DictionaryTranslationDirection
     public static IReadOnlyList<TranslationLanguage> Modes { get; } =
         Array.AsReadOnly<TranslationLanguage>([Automatic, .. TranslationLanguages.All]);
 
+    public static TranslationLanguage ReaderLanguage(string? configured) =>
+        FromSourceCode(configured ?? System.Globalization.CultureInfo.CurrentUICulture.Name)
+        ?? TranslationLanguages.Get(TranslationLanguages.DefaultId);
+
+    public static string ReverseTarget(DictionaryEntryResult entry, string query, string? readerLanguage)
+    {
+        if (FromSourceCode(entry.DetectedSourceLanguage) is { } source) return source.Id;
+        var reader = ReaderLanguage(readerLanguage).Id;
+        return reader != entry.TargetLanguage ? reader : ResolveTargetId(query, AutoId);
+    }
+
     public static string GetMode(AppSettings settings)
     {
         if (settings.DictionaryTargetMode is { } configured)

@@ -6,7 +6,7 @@ public enum EntryBlock
     Source, KeyPoints, Variants, Decisions, Structure, Grammar,
     Senses, LiteralMeaning, ContextMeaning, Inflections, Collocations, Examples,
     UsageContrasts, SynonymNuances, Mistakes, UsageNotes, Tone, Culture,
-    Thesaurus, WordFamily, WordFormation, Mnemonic, Tags, Glossary
+    Thesaurus, WordFamily, WordFormation, Mnemonic, Tags, Glossary, TranslationOptions
 }
 
 /// <summary>
@@ -23,34 +23,34 @@ public static class EntryBlockCatalog
 {
     private static readonly EntryBlock[] WordOrder =
     [
-        EntryBlock.Senses, EntryBlock.ContextMeaning, EntryBlock.Inflections, EntryBlock.WordFamily, EntryBlock.Collocations, EntryBlock.Examples,
+        EntryBlock.TranslationOptions, EntryBlock.Senses, EntryBlock.ContextMeaning, EntryBlock.Inflections, EntryBlock.WordFamily, EntryBlock.Collocations, EntryBlock.Examples,
         EntryBlock.UsageContrasts, EntryBlock.SynonymNuances, EntryBlock.Mistakes, EntryBlock.UsageNotes, EntryBlock.Thesaurus,
         EntryBlock.WordFormation, EntryBlock.Mnemonic, EntryBlock.Tags, EntryBlock.Glossary
     ];
 
     private static readonly EntryBlock[] PhraseOrder =
     [
-        EntryBlock.Senses, EntryBlock.LiteralMeaning, EntryBlock.ContextMeaning, EntryBlock.Variants, EntryBlock.Collocations,
+        EntryBlock.TranslationOptions, EntryBlock.Senses, EntryBlock.LiteralMeaning, EntryBlock.ContextMeaning, EntryBlock.Variants, EntryBlock.Collocations,
         EntryBlock.Examples, EntryBlock.UsageContrasts, EntryBlock.SynonymNuances, EntryBlock.Mistakes, EntryBlock.UsageNotes,
         EntryBlock.Culture, EntryBlock.Inflections, EntryBlock.Thesaurus, EntryBlock.Mnemonic, EntryBlock.Tags, EntryBlock.Glossary
     ];
 
     private static readonly EntryBlock[] TermOrder =
     [
-        EntryBlock.Senses, EntryBlock.ContextMeaning, EntryBlock.Collocations, EntryBlock.Examples, EntryBlock.SynonymNuances,
+        EntryBlock.TranslationOptions, EntryBlock.Senses, EntryBlock.ContextMeaning, EntryBlock.Collocations, EntryBlock.Examples, EntryBlock.SynonymNuances,
         EntryBlock.Mistakes, EntryBlock.UsageNotes, EntryBlock.Inflections, EntryBlock.Thesaurus, EntryBlock.WordFamily,
         EntryBlock.WordFormation, EntryBlock.Tags, EntryBlock.Glossary
     ];
 
     private static readonly EntryBlock[] SentenceOrder =
     [
-        EntryBlock.Source, EntryBlock.Variants, EntryBlock.Decisions, EntryBlock.Structure, EntryBlock.Grammar,
+        EntryBlock.Source, EntryBlock.TranslationOptions, EntryBlock.Variants, EntryBlock.Decisions, EntryBlock.Structure, EntryBlock.Grammar,
         EntryBlock.Collocations, EntryBlock.Tone, EntryBlock.Culture, EntryBlock.UsageNotes, EntryBlock.Glossary
     ];
 
     private static readonly EntryBlock[] ParagraphOrder =
     [
-        EntryBlock.KeyPoints, EntryBlock.Source, EntryBlock.Variants, EntryBlock.Decisions, EntryBlock.Grammar,
+        EntryBlock.KeyPoints, EntryBlock.Source, EntryBlock.TranslationOptions, EntryBlock.Variants, EntryBlock.Decisions, EntryBlock.Grammar,
         EntryBlock.Collocations, EntryBlock.Tone, EntryBlock.Culture, EntryBlock.UsageNotes, EntryBlock.Glossary
     ];
 
@@ -83,6 +83,7 @@ public static class EntryBlockCatalog
             EntryBlock.Examples => new(block, "双语例句", EntryBlockTier.Core),
             EntryBlock.Collocations => new(block, paragraph ? "文中术语与表达" : passage ? "重点表达" : "常用搭配", EntryBlockTier.Core),
             EntryBlock.KeyPoints => new(block, "要点速览", EntryBlockTier.Extended, Insight: true),
+            EntryBlock.TranslationOptions => new(block, "译法辨析", EntryBlockTier.Extended, Insight: true),
             EntryBlock.Variants => new(block, "多种译法", EntryBlockTier.Extended, Insight: true),
             EntryBlock.Decisions => new(block, "译法与依据", EntryBlockTier.Extended, Insight: true),
             EntryBlock.Structure => new(block, "句子结构", EntryBlockTier.Extended, Insight: true),

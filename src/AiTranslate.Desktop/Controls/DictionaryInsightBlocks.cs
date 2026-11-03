@@ -12,7 +12,25 @@ namespace AiTranslate.Desktop.Controls;
 /// <summary>Visual forms for the AI-judged structured blocks of a dictionary result. Each method returns null when empty.</summary>
 internal static class DictionaryInsightBlocks
 {
-    public static Control? Variants(IReadOnlyList<TranslationVariant> variants, bool passage, Action<string>? copy)
+    public static Control? Options(IReadOnlyList<TranslationOption> options, Action<string>? lookup)
+    {
+        if (options.Count < 2) return null;
+        return RichBlocks.Table("2*,3*", ["译法与含义", "异同与选用"], options.Select(option =>
+        {
+            var expression = lookup is null ? (Control)TextStyles.Selectable(option.Text, TextRole.Term)
+                : LinkText(option.Text, () => lookup(option.Text));
+            var meaning = new StackPanel
+            {
+                Spacing = AppTheme.Space.XXS, VerticalAlignment = VerticalAlignment.Top,
+                Children = { expression, TextStyles.Selectable(option.Meaning, TextRole.Secondary) }
+            };
+            var usage = RichText.Create(option.Usage, TextRole.Body);
+            usage.VerticalAlignment = VerticalAlignment.Top;
+            return (IReadOnlyList<Control>)[meaning, usage];
+        }).ToArray());
+    }
+
+    public static Control? Variants(IReadOnlyList<TranslationVariant> variants, bool passage, Action<string>? copy, Action<string>? lookup)
     {
         if (variants.Count == 0) return null;
         var list = new StackPanel { Spacing = AppTheme.Space.M + 2 };
@@ -22,7 +40,9 @@ internal static class DictionaryInsightBlocks
             var tag = StudioUi.CreateTag(variant.Style, TextRole.Label, AppTheme.Hues.Violet);
             tag.VerticalAlignment = VerticalAlignment.Top;
             tag.Margin = new Thickness(0, passage ? 3 : 1, 0, 0);
-            var body = new StackPanel { Spacing = 2, Children = { TextStyles.Selectable(variant.Text, passage ? TextRole.PassageTranslation : TextRole.Definition) } };
+            var role = passage ? TextRole.PassageTranslation : TextRole.Definition;
+            var body = new StackPanel { Spacing = 2, Children = { lookup is null ? TextStyles.Selectable(variant.Text, role)
+                : LinkText(variant.Text, () => lookup(variant.Text), role) } };
             if (!string.IsNullOrWhiteSpace(variant.Note)) body.Children.Add(RichText.Create(variant.Note, TextRole.Secondary));
             var row = new Grid
             {
@@ -53,7 +73,7 @@ internal static class DictionaryInsightBlocks
     //  Not all  →  并非所有
     //  reason …
     //  备选  所有…都不   条件  若上下文…
-    public static Control? Decisions(IReadOnlyList<TranslationDecision> decisions)
+    public static Control? Decisions(IReadOnlyList<TranslationDecision> decisions, Action<string>? lookup)
     {
         if (decisions.Count == 0) return null;
         var list = new StackPanel { Spacing = AppTheme.Space.S };
@@ -62,13 +82,15 @@ internal static class DictionaryInsightBlocks
             var anchors = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = 2 };
             anchors.Children.Add(Centered(TextStyles.Selectable(d.SourceQuote, TextRole.ExampleSource)));
             anchors.Children.Add(new MdiIcon("arrow-right", 14, AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Center });
-            anchors.Children.Add(Centered(TextStyles.Selectable(d.TargetQuote, TextRole.Term)));
+            anchors.Children.Add(lookup is null ? Centered(TextStyles.Selectable(d.TargetQuote, TextRole.Term))
+                : LinkText(d.TargetQuote, () => lookup(d.TargetQuote)));
             var item = new StackPanel { Spacing = AppTheme.Space.XXS, Children = { anchors, RichText.Create(d.Reason, TextRole.Secondary) } };
             if (!string.IsNullOrWhiteSpace(d.Alternative) && !string.IsNullOrWhiteSpace(d.Condition))
             {
                 var alt = new StackPanel { Spacing = 2 };
                 Grid.SetIsSharedSizeScope(alt, true);
-                alt.Children.Add(StudioUi.CreateKeyValue("备选译法", TextStyles.Selectable(d.Alternative, TextRole.Body), "DecisionAlt"));
+                alt.Children.Add(StudioUi.CreateKeyValue("备选译法", lookup is null ? TextStyles.Selectable(d.Alternative, TextRole.Body)
+                    : LinkText(d.Alternative, () => lookup(d.Alternative), TextRole.Body), "DecisionAlt"));
                 alt.Children.Add(StudioUi.CreateKeyValue("适用条件", RichText.Create(d.Condition, TextRole.Secondary), "DecisionAlt"));
                 item.Children.Add(new Border
                 {
@@ -303,7 +325,7 @@ internal static class DictionaryInsightBlocks
         ]).ToArray());
     }
 
-    internal static Button LinkText(string text, Action click)
+    internal static Button LinkText(string text, Action click, TextRole role = TextRole.Term)
     {
         var button = new Button
         {
@@ -313,7 +335,7 @@ internal static class DictionaryInsightBlocks
             Content = TextStyles.Apply(new TextBlock
             {
                 Text = text, TextWrapping = TextWrapping.Wrap, TextDecorations = DictionaryReadingText.LinkUnderline()
-            }, TextRole.Term)
+            }, role)
         };
         AutomationProperties.SetName(button, $"查词 {text}");
         ToolTip.SetTip(button, $"查询 “{text}”");

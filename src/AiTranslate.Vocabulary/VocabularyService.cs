@@ -265,6 +265,7 @@ public sealed partial class VocabularyService : IVocabularyService
                     CommonMistakes = string.IsNullOrWhiteSpace(result.CommonMistakes) ? current.CommonMistakes : result.CommonMistakes,
                     WordChoice = string.IsNullOrWhiteSpace(result.WordChoice) ? current.WordChoice : result.WordChoice,
                     UsageContrasts = result.UsageContrasts.Count > 0 ? result.UsageContrasts : current.UsageContrasts,
+                    TranslationOptions = result.TranslationOptions,
                     Variants = result.Variants.Count > 0 ? result.Variants : current.Variants,
                     KeyPoints = result.KeyPoints.Count > 0 ? result.KeyPoints : current.KeyPoints,
                     Alignment = result.Alignment.Count > 0 ? result.Alignment : current.Alignment,

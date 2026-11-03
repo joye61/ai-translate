@@ -115,6 +115,7 @@ public sealed record DictionaryEntryResult
     public string WordChoice { get; init; } = "";
     public IReadOnlyList<UsageContrast> UsageContrasts { get; init; } = [];
     public string DetectedSourceLanguage { get; init; } = "auto";
+    public string? ReaderLanguage { get; init; }
     public string TargetLanguage { get; init; } = "zh-Hans";
     public VocabularyItemType ItemType { get; init; } = VocabularyItemType.Word;
     public string? UkPhonetic { get; init; }
@@ -136,6 +137,7 @@ public sealed record DictionaryEntryResult
     public IReadOnlyList<string> SuggestedTags { get; init; } = [];
 
     // AI-judged extension blocks. Each is optional; the model fills one only when it adds real value.
+    public IReadOnlyList<TranslationOption> TranslationOptions { get; init; } = [];
     public IReadOnlyList<TranslationVariant> Variants { get; init; } = [];
     public IReadOnlyList<string> KeyPoints { get; init; } = [];
     public IReadOnlyList<AlignedSentence> Alignment { get; init; } = [];
@@ -201,6 +203,7 @@ public sealed record VocabularyEntry
     public string CommonMistakes { get; init; } = "";
     public string WordChoice { get; init; } = "";
     public IReadOnlyList<UsageContrast> UsageContrasts { get; init; } = [];
+    public IReadOnlyList<TranslationOption> TranslationOptions { get; init; } = [];
     public IReadOnlyList<TranslationVariant> Variants { get; init; } = [];
     public IReadOnlyList<string> KeyPoints { get; init; } = [];
     public IReadOnlyList<AlignedSentence> Alignment { get; init; } = [];

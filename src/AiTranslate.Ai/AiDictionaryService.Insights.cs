@@ -21,6 +21,20 @@ public sealed partial class AiDictionaryService
         说明性文字（reason、explanation、note、nuance、why、usageNotes、contextMeaning、wordChoice、etymologyAndRoot、memoryMnemonic、culturalNote、scenario）可用 **关键词** 强调至多两处，用 `原文词形` 引用源语片段；不使用其它 Markdown、标题或列表符号。译文、释义、例句及所有引文字段保持纯文本。
         """;
 
+    private static IReadOnlyList<TranslationOption> ReadTranslationOptions(JsonElement root)
+    {
+        var options = new List<TranslationOption>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in Objects(root, "translationOptions"))
+        {
+            var text = GetString(item, "text").Trim();
+            var meaning = GetString(item, "meaning").Trim();
+            if (text.Length == 0 || meaning.Length == 0 || !seen.Add(text)) continue;
+            options.Add(new(text, meaning, GetString(item, "usage").Trim()));
+        }
+        return options;
+    }
+
     private static IReadOnlyList<TranslationVariant> ReadVariants(JsonElement root, string primary, bool preview)
     {
         var variants = new List<TranslationVariant>();

@@ -18,6 +18,7 @@ public sealed partial class AiDictionaryService
             var data = new
             {
                 source_text = entry.SourceText, source_language = entry.DetectedSourceLanguage, target_language = entry.TargetLanguage,
+                reader_language = entry.ReaderLanguage ?? DictionaryTranslationDirection.ReaderLanguage(readerLanguageId?.Invoke()).Id,
                 context_sentence = contextSentence, primary_translation = entry.PrimaryTranslation,
                 inflections = entry.Inflections,
                 wordFamily = entry.WordFamily,
@@ -42,6 +43,7 @@ public sealed partial class AiDictionaryService
                     两类的 example 都必须含源语完整句 sourceSentence、目标语完整译句 translatedSentence 和原句中实际出现且体现新增用法的 highlightTerm。
                     若查的是单词，短语词头及例句的高亮片段都应包含该词或输入中明确列出的一个词形。
                     usageContrasts 每项含 leftForm、leftUse、rightForm、rightUse，两种自然表达与各自选用条件。禁止列错误表达充当合法对照。
+                    义项释义、选用条件和辨析的说明文字使用用户母语 reader_language。译文、英文简释和双语例句各自保留原定语言。
                     """ },
                 new() { ["role"] = "user", ["content"] = JsonSerializer.Serialize(data, JsonSerializerOptions.Web) }
             };

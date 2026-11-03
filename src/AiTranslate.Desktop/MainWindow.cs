@@ -117,13 +117,14 @@ public sealed class MainWindow : Window
             _vocabularyService,
             _speechService,
             _settingsStore,
-            onExpandToMain: (result, captured) =>
+            onExpandToMain: (result, captured, translation, context) =>
             {
                 Dispatcher.UIThread.Post(() =>
                 {
                     ShowAndActivate();
                     SwitchTab(0);
                     _dictionaryView!.DisplayResult(result, captured.Source, captured.SourceWindowTitle);
+                    if (translation is not null) _dictionaryView.LookupRelated(translation, context ?? "", fromTranslation: true);
                 });
             });
 
@@ -139,10 +140,10 @@ public sealed class MainWindow : Window
             _vocabularyService,
             _speechService,
             _settingsStore,
-            onLookupInStudio: (word, ctx, src, title) =>
+            onLookupInStudio: (word, ctx, src, title, target) =>
             {
                 SwitchTab(0);
-                _ = _dictionaryView.LookupAsync(word, ctx, src, title);
+                _ = _dictionaryView.LookupAsync(word, ctx, src, title, target);
             },
             onCollect: notebookId =>
             {

@@ -1,3 +1,4 @@
+using AiTranslate.Ai;
 using AiTranslate.Core;
 using AiTranslate.Desktop.Controls;
 using AiTranslate.Speech;
@@ -17,7 +18,16 @@ public sealed partial class VocabularyVaultView
         var passage = entry.ItemType.IsPassage();
         // Passages show the source as their own block below; a giant headline would duplicate it.
         if (!passage) reading.Children.Add(TextStyles.Selectable(entry.Headword, TextRole.Display));
-        reading.Children.Add(TextStyles.Selectable(entry.Translation, passage ? TextRole.PassageTranslation : TextRole.Translation));
+        Window? dialog = null;
+        var result = entry.ToDictionaryResult();
+        void Lookup(string query, string sentence, bool fromTranslation)
+        {
+            dialog?.Close();
+            var target = fromTranslation ? DictionaryTranslationDirection.ReverseTarget(result, query, _settings.Current.DictionaryReaderLanguage)
+                : entry.TargetLanguage;
+            _lookup(query, sentence, TranslationTriggerSource.ManualInput, "", target);
+        }
+        reading.Children.Add(DictionaryReadingText.Primary(result, (q, context) => Lookup(q, context, true)));
         var accent = PhonicsAudioBar.SourceAccent(entry.SourceLanguage);
         if (!string.IsNullOrWhiteSpace(entry.Pronunciation)) reading.Children.Add(TextStyles.Create(entry.Pronunciation, TextRole.Phonetic));
         if (accent == SpeechAccent.AmericanEnglish && !passage)
@@ -29,14 +39,9 @@ public sealed partial class VocabularyVaultView
         var context = $"{entry.ContextSentence}\n{entry.ContextTranslation}".Trim();
         if (context.Length > 0 && context != entry.Headword)
             reading.Children.Add(StudioUi.CreateInfoTile("收录时的语境", context, "format-quote-close", AppTheme.TextSecondary));
-        Window? dialog = null;
         // The notebook renders through the same block pipeline as a live lookup, so both read identically.
-        var details = new DictionaryDetails(_speech, _settings, (query, sentence, _) =>
-        {
-            dialog?.Close();
-            _lookup(query, sentence, TranslationTriggerSource.ManualInput, "");
-        }, cloze => ExamplePracticeCard.Open(reading, cloze));
-        details.ShowEntry(entry.ToDictionaryResult(), complete: true);
+        var details = new DictionaryDetails(_speech, _settings, Lookup, cloze => ExamplePracticeCard.Open(reading, cloze));
+        details.ShowEntry(result, complete: true);
         reading.Children.Add(details);
 
         var filing = Section();
@@ -59,7 +64,7 @@ public sealed partial class VocabularyVaultView
         reading.Children.Add(StudioUi.CreateSecondaryButton("sparkles", "在词典中重新解析", () =>
         {
             window.Close();
-            _lookup(entry.Headword, entry.GetDictionaryContext(), entry.CaptureSource, entry.SourceTitle);
+            _lookup(entry.Headword, entry.GetDictionaryContext(), entry.CaptureSource, entry.SourceTitle, entry.TargetLanguage);
         }));
         await window.ShowDialog(owner);
     }

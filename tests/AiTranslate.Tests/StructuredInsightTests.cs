@@ -47,8 +47,9 @@ public sealed class StructuredInsightTests
             }
             else
             {
-                Assert.Equal(EntryBlock.Senses, specs[0].Block);
-                Assert.Equal(EntryBlockTier.Core, specs[0].Tier);
+                Assert.Equal(EntryBlock.TranslationOptions, specs[0].Block);
+                Assert.Equal(EntryBlock.Senses, specs[1].Block);
+                Assert.Equal(EntryBlockTier.Core, specs[1].Tier);
                 Assert.DoesNotContain(specs, s => s.Block is EntryBlock.Source or EntryBlock.Decisions or EntryBlock.Structure or EntryBlock.Tone);
             }
         }
@@ -123,6 +124,7 @@ public sealed class StructuredInsightTests
         {
             SourceText = "break the ice", PrimaryTranslation = "打破僵局", ItemType = VocabularyItemType.Idiom,
             LiteralMeaning = "打破冰面", CulturalNote = "源自破冰船为船队开路。", Variants = [new("口语", "活跃气氛")],
+            TranslationOptions = [new("打破僵局", "break a deadlock", "Emphasizes the impasse.")],
             SynonymNuances = [new("break the ice", "开场缓和"), new("warm up", "预热")],
             Mistakes = [new("break an ice", "break the ice", "固定搭配用 the")], Tone = new(2, ["轻松"])
         };
@@ -136,6 +138,7 @@ public sealed class StructuredInsightTests
             Assert.Equal(result.LiteralMeaning, projected.LiteralMeaning);
             Assert.Equal(result.CulturalNote, projected.CulturalNote);
             Assert.Equal(result.Variants, projected.Variants);
+            Assert.Equal(result.TranslationOptions, projected.TranslationOptions);
             Assert.Equal(result.SynonymNuances, projected.SynonymNuances);
             Assert.Equal(result.Mistakes, projected.Mistakes);
             Assert.Equal(["轻松"], projected.Tone!.Tones);

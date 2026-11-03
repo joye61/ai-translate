@@ -35,7 +35,7 @@ public sealed class DictionaryInputTests
                 var dictionary = new PendingLookup();
                 using var speech = new KokoroSpeechService(directory.FullName);
                 var popup = new SelectionPopupWindow(dictionary, new VocabularyService(Path.Combine(directory.FullName, "words.json")),
-                    speech, new AppSettingsStore(Path.Combine(directory.FullName, "settings.json")), (_, _) => { });
+                    speech, new AppSettingsStore(Path.Combine(directory.FullName, "settings.json")), (_, _, _, _) => { });
                 try
                 {
                     var capture = new CapturedTextEvent("draft", TranslationTriggerSource.SelectionPopup, new PointD(10, 10));
@@ -286,6 +286,54 @@ public sealed class DictionaryInputTests
             var child = Assert.Single(dictionary.Requests);
             Assert.Equal(("rained", "It rained last night.", "ja"), (child.Query, child.Context, child.Language));
             child.Complete("雨が降った");
+        });
+    }
+
+    [Theory]
+    [InlineData("对比", "zh-CN", "zh-Hans")]
+    [InlineData("比べる", "ja-JP", "ja")]
+    public async Task EachTranslationOpensItsOwnReverseLookupAndCanReturn(string query, string source, string reverse)
+    {
+        await RunInStudio((window, view, dictionary, _) =>
+        {
+            var entry = new DictionaryEntryResult
+            {
+                SourceText = query, PrimaryTranslation = "compare; compare with; contrast",
+                TargetLanguage = "en", DetectedSourceLanguage = source,
+                TranslationOptions = [new("compare", "比较", "考察异同"), new("compare with", "与……比较", "明确比较对象"),
+                    new("contrast", "对照", "突出差异")]
+            };
+            view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
+            foreach (var option in entry.TranslationOptions)
+            {
+                window.UpdateLayout();
+                var link = view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == $"查词 {option.Text}");
+                link.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                VerifyLookup(option.Text);
+
+                var heading = view.GetVisualDescendants().OfType<DictionaryReadingText>().Single(b => b.Inlines?.Text == entry.PrimaryTranslation);
+                var index = entry.PrimaryTranslation.IndexOf(option.Text, StringComparison.Ordinal);
+                var point = heading.TranslatePoint(heading.TextLayout.HitTestTextRange(index, 1).First().Center, window)!.Value;
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                var previousCount = dictionary.Requests.Count;
+                window.MouseDown(point, MouseButton.Left);
+                window.MouseUp(point, MouseButton.Left);
+                Assert.True(dictionary.Requests.Count > previousCount, $"Click on {option.Text} at {point} hit {window.InputHitTest(point)}; selection '{heading.SelectedText}'");
+                VerifyLookup(option.Text);
+            }
+            Assert.Equal(6, dictionary.Requests.Count);
+
+            void VerifyLookup(string expected)
+            {
+                var request = dictionary.Requests[^1];
+                Assert.Equal((expected, reverse, ""), (request.Query, request.Language, request.Context));
+                request.Complete("译义");
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                view.GetVisualDescendants().OfType<Button>().Single(b => b.GetVisualDescendants().OfType<TextBlock>()
+                    .Any(t => t.Text == "返回上一级")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                window.UpdateLayout();
+            }
         });
     }
 

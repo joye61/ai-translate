@@ -118,9 +118,9 @@ public sealed class DictionaryStudioView : UserControl
 
     internal void FocusInput() => _composer.FocusInput();
 
-    public Task LookupAsync(string query, string? contextSentence, TranslationTriggerSource source, string sourceTitle) =>
+    public Task LookupAsync(string query, string? contextSentence, TranslationTriggerSource source, string sourceTitle, string? targetLanguage = null) =>
         RunLookupAsync(query, contextSentence, source, sourceTitle,
-            DictionaryTranslationDirection.ResolveTargetId(query, _composer.LanguageId ?? DictionaryTranslationDirection.GetMode(_settings.Current)));
+            targetLanguage ?? DictionaryTranslationDirection.ResolveTargetId(query, _composer.LanguageId ?? DictionaryTranslationDirection.GetMode(_settings.Current)));
 
     private async Task RunLookupAsync(string query, string? contextSentence, TranslationTriggerSource source, string sourceTitle,
         string language, DictionaryEntryResult? refreshing = null, bool linked = false)
@@ -208,11 +208,11 @@ public sealed class DictionaryStudioView : UserControl
         return page;
     }
 
-    private void LookupRelated(string text, string sentence, bool fromTranslation)
+    internal void LookupRelated(string text, string sentence, bool fromTranslation)
     {
         if (_current is not { } parent || string.IsNullOrWhiteSpace(text)) return;
         var mode = _composer.LanguageId ?? DictionaryTranslationDirection.AutoId;
-        if (fromTranslation) mode = DictionaryTranslationDirection.FromSourceCode(parent.Entry.DetectedSourceLanguage)?.Id ?? DictionaryTranslationDirection.AutoId;
+        if (fromTranslation) mode = DictionaryTranslationDirection.ReverseTarget(parent.Entry, text, _settings.Current.DictionaryReaderLanguage);
         else if (mode != DictionaryTranslationDirection.AutoId) mode = parent.Entry.TargetLanguage;
         var target = DictionaryTranslationDirection.ResolveTargetId(text, mode);
         if (_history.Count == 16) _history.RemoveAt(0);

@@ -58,7 +58,8 @@ public sealed class App : Application
             var settingsStore = new AppSettingsStore();
             var vocabularyService = new VocabularyService();
             var dictionaryService = new AiDictionaryService(() => settingsStore.CreateTransport(),
-                new DictionaryEntryCache(), vocabularyService.FindGlossaryTerms, vocabularyService.RefreshCollectedEntries);
+                new DictionaryEntryCache(), vocabularyService.FindGlossaryTerms, vocabularyService.RefreshCollectedEntries,
+                () => settingsStore.Current.DictionaryReaderLanguage);
             _speechService = new KokoroSpeechService();
 
             var mainWindow = new MainWindow(

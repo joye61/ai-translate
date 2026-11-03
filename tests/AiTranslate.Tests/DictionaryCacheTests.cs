@@ -10,6 +10,29 @@ namespace AiTranslate.Tests;
 public sealed class DictionaryCacheTests
 {
     [Fact]
+    public async Task ReadersKeepSeparateExplanationsForTheSameLanguagePair()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var cache = new DictionaryEntryCache(Path.Combine(dir.FullName, "cache.sqlite3"));
+            var language = "ja";
+            var requests = 0;
+            var ai = new AiDictionaryService(() => new Reply("compare", payload =>
+            {
+                Assert.Equal(language, payload["reader_language"]!.GetValue<string>());
+                requests++;
+            }), cache, readerLanguageId: () => language);
+            await ai.LookupOrTranslateAsync("比較", "en");
+            language = "zh-Hant";
+            Assert.Equal(DictionaryResultOrigin.Ai, (await ai.LookupOrTranslateAsync("比較", "en")).Origin);
+            language = "ja";
+            Assert.Equal(DictionaryResultOrigin.Cache, (await ai.LookupOrTranslateAsync("比較", "en")).Origin);
+            Assert.Equal(2, requests);
+        }
+        finally { dir.Delete(true); }
+    }
+    [Fact]
     public async Task OverlappingPopupAndWorkbenchLookupsMakeOneRequestAndCanCancelIndependently()
     {
         var dir = Directory.CreateTempSubdirectory();

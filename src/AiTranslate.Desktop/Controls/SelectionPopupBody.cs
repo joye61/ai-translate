@@ -17,15 +17,18 @@ internal sealed class SelectionPopupBody : Grid
     private readonly AppSettingsStore _settings;
     private readonly Border _audio = new() { IsVisible = false };
     private readonly TextBlock _translation = TextStyles.Create(null, TextRole.Translation);
+    private readonly Border _translationHost = new();
+    private readonly Action<string, string> _lookup;
     private readonly StackPanel _senses = new() { Spacing = AppTheme.Space.XS, IsVisible = false };
     private readonly TextBlock _hint = TextStyles.Create(null, TextRole.Secondary);
     private readonly Border _hintCard;
     private DictionaryEntryResult? _last;
 
-    public SelectionPopupBody(ISpeechSynthesisService speech, AppSettingsStore settings)
+    public SelectionPopupBody(ISpeechSynthesisService speech, AppSettingsStore settings, Action<string, string> lookup)
     {
         _speech = speech;
         _settings = settings;
+        _lookup = lookup;
         MinHeight = 116;
         RowDefinitions = new RowDefinitions("Auto,*");
         _translation.FontSize = AppTheme.Type.BodyLarge;
@@ -56,7 +59,8 @@ internal sealed class SelectionPopupBody : Grid
                 }
             }
         };
-        _reading.Children.AddRange([_audio, _translation, _senses, _hintCard]);
+        _translationHost.Child = _translation;
+        _reading.Children.AddRange([_audio, _translationHost, _senses, _hintCard]);
         _reading.Transitions = [new DoubleTransition { Property = OpacityProperty, Duration = RevealDuration }];
         Children.Add(_reading);
         SetRow(_draft, 1);
@@ -110,7 +114,11 @@ internal sealed class SelectionPopupBody : Grid
         _last = entry;
         if (entry.Origin is DictionaryResultOrigin.Cache or DictionaryResultOrigin.BuiltIn) _reading.Transitions = null;
         if (_translation.IsVisible || _senses.IsVisible || _hintCard.IsVisible) _reading.Opacity = 1;
-        if (complete) EndDraft(entry.Origin == DictionaryResultOrigin.Ai);
+        if (complete)
+        {
+            _translationHost.Child = DictionaryReadingText.Primary(entry, _lookup);
+            EndDraft(entry.Origin == DictionaryResultOrigin.Ai);
+        }
     }
 
     public void ShowError(string message)

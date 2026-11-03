@@ -10,6 +10,20 @@ public static partial class DictionaryQuery
     public static bool IsWordOrTerm(this VocabularyItemType type) =>
         type is VocabularyItemType.Word or VocabularyItemType.TechnicalTerm;
 
+    public static IEnumerable<string> PrimaryRenderings(this DictionaryEntryResult entry)
+    {
+        if (entry.ItemType.IsPassage()) return [entry.PrimaryTranslation];
+        var options = entry.TranslationOptions.Select(o => o.Text).ToArray();
+        return entry.PrimaryTranslation.Split([';', '；'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .SelectMany(part =>
+            {
+                // A provider can use commas or other punctuation between structured candidates.
+                // Keep punctuation inside an expression intact when there is no structured match.
+                var matches = options.Where(o => DictionaryTextMatch.IndexOf(part, o, comparison: StringComparison.Ordinal) >= 0).ToArray();
+                return matches.Length > 1 && !matches.Contains(part, StringComparer.Ordinal) ? matches : [part];
+            });
+    }
+
     // A layout hint while the request is pending, also used for providers that omit itemType.
     // The structured response can distinguish a short sentence from a phrase more accurately.
     public static VocabularyItemType SuggestType(string text)
