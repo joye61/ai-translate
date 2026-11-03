@@ -1,4 +1,5 @@
 using AiTranslate.Core;
+using AiTranslate.Desktop.Controls;
 using AiTranslate.Vocabulary;
 using Avalonia;
 using Avalonia.Controls;
@@ -51,7 +52,7 @@ public sealed class SystemTrayService : IDisposable
 
         var selectionItem = new NativeMenuItem($"灵动划词速译 ({_settingsStore.Current.SelectionTranslateHotkey})")
         {
-            Icon = RenderMdiIconBitmap("cursor-text", AppTheme.Purple)
+            Icon = RenderMdiIconBitmap("cursor-text", AppTheme.AccentBright)
         };
         selectionItem.Click += (_, _) => onTriggerSelectionTranslate();
 
@@ -123,11 +124,12 @@ public sealed class SystemTrayService : IDisposable
 
         _trayIcon = new TrayIcon
         {
-            Icon = CreateAppWindowIcon(),
+            Icon = AppIcons.CreateTrayIcon(),
             ToolTipText = "AI Translate · AI 词典 / 划词 / 截图原位翻译 / 超级单词本",
             Menu = menu,
             IsVisible = true
         };
+        if (OperatingSystem.IsMacOS()) MacOSProperties.SetIsTemplateIcon(_trayIcon, true);
         _trayIcon.Clicked += (_, _) => onShowMainWindow();
 
         // A TrayIcon only becomes a real OS tray icon once it is registered on the Application
@@ -169,22 +171,7 @@ public sealed class SystemTrayService : IDisposable
         _trayIcon.ToolTipText = $"AI Translate · 今日待复习 {stats.DueTodayCount} 词\nAlt+Q 划词 | Alt+S 截图翻译 | 单击打开主界面";
     }
 
-    public static WindowIcon CreateAppWindowIcon()
-    {
-        var badge = new Border
-        {
-            Width = 32,
-            Height = 32,
-            CornerRadius = new CornerRadius(8),
-            Background = AppTheme.BrandGradient,
-            Child = new MdiIcon("translate", 20, Brushes.White)
-        };
-        badge.Measure(new Size(32, 32));
-        badge.Arrange(new Rect(0, 0, 32, 32));
-        var rtb = new RenderTargetBitmap(new PixelSize(32, 32), new Vector(96, 96));
-        rtb.Render(badge);
-        return new WindowIcon(rtb);
-    }
+    public static WindowIcon CreateAppWindowIcon() => AppIcons.CreateWindowIcon();
 
     private static Bitmap RenderMdiIconBitmap(string iconName, IBrush brush)
     {

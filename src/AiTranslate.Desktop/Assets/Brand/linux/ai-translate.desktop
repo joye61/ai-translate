@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AI Translate
+GenericName=Dictionary and translator
+GenericName[zh_CN]=词典与翻译
+Exec=AiTranslate.Desktop
+Icon=ai-translate
+StartupWMClass=AiTranslate.Desktop
+Categories=Education;Languages;
+Terminal=false

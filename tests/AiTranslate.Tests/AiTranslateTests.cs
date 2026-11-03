@@ -31,15 +31,26 @@ public static class TestProgram
         speechTests.KokoroSpeechService_FormatsIpaPhonemeLiteralsAndSplitsPhonicsSyllables();
 
         var dictionaryTests = new AiDictionaryServiceTests();
+        await new DictionaryCacheTests().CachePersistsAcrossRestartsAndRefreshOnlyReplacesSuccessfulResults();
+        await new DictionaryCacheTests().GlossaryIsBoundedToThisTextAndChangesInvalidateSentenceTranslations();
+        await dictionaryTests.StreamingPreview_EmitsDecodedTranslationBeforeDetailsArrive();
+        await dictionaryTests.StreamingPreview_FindsTranslationAfterOtherFields();
         dictionaryTests.ParseDictionaryResponse_HandlesNonObjectArrayItemsGracefully();
-        dictionaryTests.ParseDictionaryResponse_UnparsableFencedJson_FallbackStripsMarkdownFence();
-        dictionaryTests.ParseDictionaryResponse_NonObjectJsonRoot_FallsBackInsteadOfThrowing();
+        dictionaryTests.ParseDictionaryResponse_RejectsBrokenStructuredResultsAndAcceptsPlainText();
+        await dictionaryTests.StreamingFields_ShowsRowsInsideOpenArrays();
+        await dictionaryTests.OfflineLookup_OnlyUsesRealEntriesInTheRequestedLanguage();
 
-        var transportTests = new AiTransportModelHeuristicsTests();
-        await transportTests.CompleteAsync_OpenAiReasoningModels_SendReasoningEffortOnlyWhenSupported();
-        await transportTests.CompleteAsync_HybridThinkingModels_SkipDedicatedThinkingOnlyModel();
+        var transportTests = new AiTransportThinkingTests();
+        await new DictionaryReadingTests().GrammarAndTermCanOverlapWithoutBreakingSelectionOrClickLookup();
+        await transportTests.RequestsDisableThinkingForEachProvider();
+        await transportTests.StopsWhenEndpointRejectsOrIgnoresTheOptOut();
 
-        Console.WriteLine("ALL 7 TEST SUITES PASSED SUCCESSFULLY.");
+        await new DictionaryInputTests().ShiftEnterAddsLineAndEnterStartsStreamingTranslation();
+        await new DictionaryInputTests().OnlyCurrentLookupCanDisplayOrSaveItsResult();
+        await new DictionaryInputTests().RefreshUsesTheDisplayedLanguageAndKeepsThePreviousResultOnFailure();
+        await new DictionaryInputTests().DictionarySectionsArriveDuringLookupAndPassagesHaveTheirOwnLayout();
+        await new DictionaryInputTests().StreamingKeepsComposerInPlaceAndRespectsReadingPosition();
+        Console.WriteLine("ALL TEST SUITES PASSED SUCCESSFULLY.");
         return 0;
     }
 }
@@ -347,6 +358,67 @@ public sealed class TranslationPipelineTests
 public sealed class AiDictionaryServiceTests
 {
     [Fact]
+    public void GrammarHighlightsMustBeDistinctExactSpansOfTheSource()
+    {
+        const string source = "Had I known, I would have waited.";
+        const string json = """
+            {"primaryTranslation":"我要是早知道，就会等一等。","itemType":"Sentence","grammarHighlights":[
+              {"quote":"would have waited","label":"虚拟结果","explanation":"说明未发生的结果。"},
+              {"quote":"known","label":"","explanation":"没有标签"},
+              {"quote":"I","label":"代词","explanation":"两处都可能匹配"},
+              {"quote":"would have","label":"重叠","explanation":"与上面的片段重叠"},
+              {"quote":"wait","label":"词干","explanation":"不构成独立词"},
+              {"quote":"If I had known","label":"条件","explanation":"这是改写"},
+              {"quote":"Had I known","label":"倒装条件","explanation":"省略 if，had 提到主语前。"}]}
+            """;
+        var result = AiDictionaryService.ParseDictionaryResponse(source, "zh-Hans", json);
+        Assert.Equal(new[] { "Had I known", "would have waited" }, result.GrammarHighlights.Select(h => h.Quote));
+    }
+    [Fact]
+    public async Task StreamingPreview_EmitsDecodedTranslationBeforeDetailsArrive()
+    {
+        const string first = "```json\n{\"primaryTranslation\":\"译\\n\\\"文\\\"\\\\\\uD83D\\uDE00\"";
+        const string expected = "译\n\"文\"\\😀";
+        var previews = new List<string>();
+        var transport = new SplitDictionaryReply(first, ",\"usageNotes\":\"用法\"}\n```", () =>
+        {
+            Assert.Equal("译", previews[0]);
+            Assert.Equal(expected, previews[^1]);
+        });
+
+        var entry = await new AiDictionaryService(() => transport)
+            .LookupOrTranslateAsync("sample", "zh-Hans", onStreamingPreview: previews.Add);
+
+        Assert.All(previews, text => Assert.StartsWith(text, expected));
+        Assert.Equal(expected, entry.PrimaryTranslation);
+        Assert.Equal("用法", entry.UsageNotes);
+    }
+
+    [Fact]
+    public async Task StreamingPreview_FindsTranslationAfterOtherFields()
+    {
+        var previews = new List<string>();
+        var transport = new SplitDictionaryReply("""{"ignored":{"primaryTranslation":"嵌套值"},"usageNotes":"用法","primaryTranslation":"译""",
+            "文\"}", () => Assert.Equal("译", Assert.Single(previews)));
+        var entry = await new AiDictionaryService(() => transport)
+            .LookupOrTranslateAsync("sample", "zh-Hans", onStreamingPreview: previews.Add);
+
+        Assert.Equal("译文", previews[^1]);
+        Assert.Equal("译文", entry.PrimaryTranslation);
+    }
+
+    private sealed class SplitDictionaryReply(string prefix, string rest, Action beforeDetails) : IAiTransport
+    {
+        public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
+        {
+            foreach (var character in prefix) onText(character.ToString());
+            beforeDetails();
+            onText(rest);
+            return Task.FromResult(new AiCompletion(prefix + rest, []));
+        }
+    }
+
+    [Fact]
     public void ParseDictionaryResponse_HandlesNonObjectArrayItemsGracefully()
     {
         // senses/inflections/collocations/examples items that aren't JSON objects (e.g. the model
@@ -378,89 +450,140 @@ public sealed class AiDictionaryServiceTests
     }
 
     [Fact]
-    public void ParseDictionaryResponse_UnparsableFencedJson_FallbackStripsMarkdownFence()
+    public void ParseDictionaryResponse_RejectsBrokenStructuredResultsAndAcceptsPlainText()
     {
-        // When the whole response fails to parse as JSON, the fallback must show the fence-stripped
-        // text, not the raw response with a leaked ```json wrapper, as the plain-text translation.
-        const string fenced = "```json\n{ this is not valid json\n```";
-
-        var result = AiDictionaryService.ParseDictionaryResponse("broken", "zh-Hans", fenced);
-
-        Assert.DoesNotContain("```", result.PrimaryTranslation);
-        Assert.Equal("{ this is not valid json", result.PrimaryTranslation);
+        foreach (var bad in new[] { "```json\n{ this is not valid json\n```", "[\"unexpected\",\"array\"]", "{\"senses\":[]}", "" })
+            Assert.Throws<AiException>(() => AiDictionaryService.ParseDictionaryResponse("broken", "zh-Hans", bad));
+        var fallback = AiDictionaryService.ParseDictionaryResponse("Look up", "zh-Hans", "查阅");
+        Assert.Equal(VocabularyItemType.Phrase, fallback.ItemType);
+        Assert.Equal("查阅", fallback.PrimaryTranslation);
     }
 
     [Fact]
-    public void ParseDictionaryResponse_NonObjectJsonRoot_FallsBackInsteadOfThrowing()
+    public async Task StreamingFields_ShowsRowsInsideOpenArrays()
     {
-        // A syntactically valid JSON value that isn't an object at the top level (e.g. the model
-        // wraps its reply in an array) used to make root.TryGetProperty throw InvalidOperationException
-        // instead of degrading to the plain-text fallback like any other unparsable response.
-        const string arrayRoot = """["unexpected", "array"]""";
+        var snapshots = new List<DictionaryEntryResult>();
+        const string prefix = """{"primaryTranslation":"集合","senses":[{"partOfSpeech":"n.","definitionZh":"含有 {x,y} 和 \"引号\" 的集合"}],"examples":[{"sourceSentence":"A set","translatedSentence":"一组"}""";
+        var transport = new SplitDictionaryReply(prefix, "]}", () =>
+        {
+            Assert.Equal("含有 {x,y} 和 \"引号\" 的集合", Assert.Single(snapshots[^1].Senses).DefinitionZh);
+            Assert.Equal("一组", Assert.Single(snapshots[^1].Examples).TranslatedSentence);
+        });
+        var result = await new AiDictionaryService(() => transport).LookupOrTranslateAsync("set", "zh-Hans", onEntryPreview: snapshots.Add);
+        Assert.Single(result.Examples);
+        Assert.Single(snapshots[^1].Examples);
+    }
 
-        var result = AiDictionaryService.ParseDictionaryResponse("hello", "zh-Hans", arrayRoot);
+    [Theory]
+    [InlineData("{\"senses\":[{\"partOfSpeech\":\"n.\",\"definitionZh\":\"医学检", "查\"}],\"primaryTranslation\":\"检验\"}", "sense", "医学检")]
+    [InlineData("{\"primaryTranslation\":\"检验\",\"senses\":[{\"definitionZh\":\"检验\",\"example\":{\"sourceSentence\":\"They te", "st it.\",\"translatedSentence\":\"他们检验它。\"}}]}", "senseExample", "They te")]
+    [InlineData("{\"primaryTranslation\":\"检验\",\"collocations\":[{\"phrase\":\"run a test\",\"example\":{\"sourceSentence\":\"Run it.\",\"translatedSentence\":\"运行", "测试。\"}}]}", "pairExample", "运行")]
+    [InlineData("{\"primaryTranslation\":\"检验\",\"examples\":[{\"sourceSentence\":\"Say \\\"test\\\" \\uD83D\\uDE00 \\u4E", "2D\",\"translatedSentence\":\"说测试。\"}]}", "example", "Say \"test\" 😀 ")]
+    [InlineData("{\"primaryTranslation\":\"检验\",\"usageNotes\":\"用于", "医学。\"}", "notes", "用于")]
+    public async Task PreviewProjectsUnfinishedTextBeforeTheProviderContinues(string prefix, string rest, string section, string expected)
+    {
+        DictionaryEntryResult? snapshot = null;
+        // One real SSE delta can end inside any field, including an escaped Unicode character.
+        var transport = new PausedDictionaryReply(prefix, rest, () =>
+        {
+            Assert.NotNull(snapshot);
+            var visible = section switch
+            {
+                "sense" => Assert.Single(snapshot.Senses).DefinitionZh,
+                "senseExample" => Assert.Single(snapshot.Senses).Example?.SourceSentence,
+                "pairExample" => Assert.Single(snapshot.Collocations).Example?.TranslatedSentence,
+                "example" => Assert.Single(snapshot.Examples).SourceSentence,
+                _ => snapshot.UsageNotes
+            };
+            Assert.Equal(expected, visible);
+        });
+        var result = await new AiDictionaryService(() => transport).LookupOrTranslateAsync("test", "zh-Hans", onEntryPreview: s => snapshot = s);
+        Assert.Equal("检验", result.PrimaryTranslation);
+    }
 
-        Assert.Equal("hello", result.SourceText);
-        Assert.Equal(arrayRoot, result.PrimaryTranslation);
+    private sealed class PausedDictionaryReply(string first, string last, Action inspect) : IAiTransport
+    {
+        public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
+        {
+            onText(first);
+            inspect();
+            onText(last);
+            return Task.FromResult(new AiCompletion(first + last, []));
+        }
+    }
+
+    [Fact]
+    public async Task OfflineLookup_OnlyUsesRealEntriesInTheRequestedLanguage()
+    {
+        var offline = new AiDictionaryService(() => null);
+        var sample = await offline.LookupOrTranslateAsync("serendipity", "zh-Hans");
+        Assert.NotEmpty(sample.Senses);
+        await Assert.ThrowsAsync<AiException>(() => offline.LookupOrTranslateAsync("serendipity", "ja"));
+        await Assert.ThrowsAsync<AiException>(() => offline.LookupOrTranslateAsync("arbitrary query", "zh-Hans"));
     }
 }
 
-public sealed class AiTransportModelHeuristicsTests
+public sealed class AiTransportThinkingTests
 {
     [Fact]
-    public async Task CompleteAsync_OpenAiReasoningModels_SendReasoningEffortOnlyWhenSupported()
+    public async Task RequestsDisableThinkingForEachProvider()
     {
-        // gpt-5-chat-latest is the non-reasoning chat variant and rejects reasoning_effort.
-        Assert.False(await SendsFieldAsync("openai", "gpt-5-chat-latest", "reasoning_effort"));
-        // o1-mini/o1-preview never supported reasoning_effort, unlike full o1.
-        Assert.False(await SendsFieldAsync("openai", "o1-mini", "reasoning_effort"));
-        Assert.False(await SendsFieldAsync("openai", "o1-preview", "reasoning_effort"));
-        // "minimal" is only valid for GPT-5; the o-series only accepts low/medium/high.
-        Assert.Equal("minimal", await GetFieldValueAsync("openai", "gpt-5", "reasoning_effort"));
-        Assert.Equal("low", await GetFieldValueAsync("openai", "o1", "reasoning_effort"));
-        Assert.Equal("low", await GetFieldValueAsync("openai", "o3-mini", "reasoning_effort"));
+        foreach (var model in new[] { "deepseek-flash", "deepseek-chat", "deepseek-v4-pro", "custom-model" })
+            Assert.Equal("disabled", (string?)(await CaptureBodyAsync("deepseek", model))["thinking"]?["type"]);
+        foreach (var model in new[] { "gpt-5.1", "o1-preview", "gpt-5", "o3-mini", "custom-model" })
+            Assert.Equal("none", (string?)(await CaptureBodyAsync("openai", model))["reasoning_effort"]);
+        foreach (var model in new[] { "gpt-4o-mini", "gpt-4.1", "ft:gpt-4o-mini-2024-07-18:org:name:id", "gpt-5-chat-latest" })
+            Assert.False((await CaptureBodyAsync("openai", model)).ContainsKey("reasoning_effort"));
+
+        Assert.False((bool?)(await CaptureBodyAsync("compatible", "kimi-k2-thinking"))["enable_thinking"]);
+        Assert.False((bool?)(await CaptureBodyAsync("compatible", "qwen-plus", "https://dashscope.aliyuncs.com/compatible-mode/v1"))["enable_thinking"]);
+        Assert.Equal("none", (string?)(await CaptureBodyAsync("ollama", "qwen3:8b"))["reasoning_effort"]);
+        Assert.Equal("none", (string?)(await CaptureBodyAsync("compatible", "local-model", "http://localhost:8000/v1"))["reasoning_effort"]);
+        Assert.Equal("disabled", (string?)(await CaptureBodyAsync("compatible", "deepseek-flash", "https://api.deepseek.com/v1"))["thinking"]?["type"]);
     }
 
     [Fact]
-    public async Task CompleteAsync_HybridThinkingModels_SkipDedicatedThinkingOnlyModel()
+    public async Task StopsWhenEndpointRejectsOrIgnoresTheOptOut()
     {
-        Assert.True(await SendsFieldAsync("compatible", "Qwen/Qwen3-32B", "enable_thinking"));
-        // kimi-k2-thinking is a dedicated always-thinking model with no non-thinking toggle, unlike
-        // the hybrid Qwen3/GLM models that expose enable_thinking on the same model id.
-        Assert.False(await SendsFieldAsync("compatible", "kimi-k2-thinking", "enable_thinking"));
+        foreach (var (status, body) in new[]
+        {
+            (HttpStatusCode.BadRequest, """{"error":{"param":"reasoning_effort"}}"""),
+            (HttpStatusCode.OK, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"working\",\"content\":\"answer\"}}]}\n\n"),
+            (HttpStatusCode.OK, "data: {\"choices\":[{\"delta\":{\"reasoning_details\":[{\"type\":\"reasoning.encrypted\"}]}}]}\n\n"),
+            (HttpStatusCode.OK, "data: {\"choices\":[],\"usage\":{\"completion_tokens_details\":{\"reasoning_tokens\":1}}}\n\n")
+        })
+        {
+            var requests = 0;
+            using var client = new HttpClient(new CapturingHandler(_ => requests++, status, body));
+            using var transport = new AiTransport(new("deepseek", "deepseek-flash"), client);
+            var shown = new StringBuilder();
+            var error = await Assert.ThrowsAsync<AiException>(() =>
+                transport.CompleteAsync([], [], text => shown.Append(text), CancellationToken.None));
+            Assert.Contains("非思考模式", error.Message);
+            Assert.Equal(1, requests);
+            Assert.Empty(shown.ToString());
+        }
     }
 
-    private static async Task<bool> SendsFieldAsync(string providerId, string modelId, string field)
-    {
-        var body = await CaptureBodyAsync(providerId, modelId);
-        return body.ContainsKey(field);
-    }
-
-    private static async Task<string?> GetFieldValueAsync(string providerId, string modelId, string field)
-    {
-        var body = await CaptureBodyAsync(providerId, modelId);
-        return body.TryGetPropertyValue(field, out var value) ? value!.GetValue<string>() : null;
-    }
-
-    private static async Task<JsonObject> CaptureBodyAsync(string providerId, string modelId)
+    private static async Task<JsonObject> CaptureBodyAsync(string providerId, string modelId, string? baseUrl = null)
     {
         JsonObject? capturedBody = null;
         using var client = new HttpClient(new CapturingHandler(body => capturedBody = body));
-        using var transport = new AiTransport(new AiProviderConfig(providerId, modelId, null, "test-key"), client);
+        using var transport = new AiTransport(new AiProviderConfig(providerId, modelId, baseUrl, "test-key"), client);
         await transport.CompleteAsync(
             [new JsonObject { ["role"] = "user", ["content"] = "hi" }], [], _ => { }, CancellationToken.None);
         Assert.NotNull(capturedBody);
         return capturedBody!;
     }
 
-    private sealed class CapturingHandler(Action<JsonObject> onRequest) : HttpMessageHandler
+    private sealed class CapturingHandler(Action<JsonObject> onRequest, HttpStatusCode status = HttpStatusCode.OK,
+        string sse = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":null,\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n") : HttpMessageHandler
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var json = await request.Content!.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             onRequest(JsonNode.Parse(json)!.AsObject());
-            const string sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n";
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(status)
             {
                 Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
             };

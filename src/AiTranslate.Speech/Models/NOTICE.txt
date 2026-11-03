@@ -1,0 +1,7 @@
+Kokoro-82M weights and voices: hexgrad/Kokoro-82M, Apache License 2.0.
+https://huggingface.co/hexgrad/Kokoro-82M
+ONNX export: taylorchu/kokoro-onnx v0.2.0, kokoro.onnx
+SHA-256: 7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5
+https://github.com/taylorchu/kokoro-onnx/releases/tag/v0.2.0
+KokoroSharp 0.6.7 is licensed under the MIT license.
+Bundled voice documentation is in voices/. The eSpeak NG distribution includes its license in espeak/LICENSE.

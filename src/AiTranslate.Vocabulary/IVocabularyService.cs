@@ -49,9 +49,14 @@ public interface IVocabularyService
     IReadOnlyList<VocabularyEntry> QueryEntries(VocabularyQueryFilter filter, DateTimeOffset? now = null);
     IReadOnlyList<VocabularyEntry> GetDueQueue(string? notebookId = null, int maxCount = 50, DateTimeOffset? now = null);
     VocabularyEntry? FindByHeadword(string headword);
+    bool IsCollected(DictionaryEntryResult result, string notebookId);
+    void RemoveFromNotebook(DictionaryEntryResult result, string notebookId);
     VocabularyDashboardStats GetDashboardStats(DateTimeOffset? now = null);
 
     VocabularyNotebook CreateNotebook(string name, string description, string iconName = "book-open-variant", string accentHex = "#3B82F6");
+    VocabularyNotebook UpdateNotebook(string id, string name, string description);
+    void DeleteNotebook(string id);
+    void UpdateEntryDetails(string entryId, string notebookId, VocabularyItemType type, string translation, IReadOnlyList<string> tags, string note);
     VocabularyEntry AddOrUpdateFromDictionary(
         DictionaryEntryResult result,
         string notebookId = "default",

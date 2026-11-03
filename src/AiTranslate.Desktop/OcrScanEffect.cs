@@ -17,12 +17,12 @@ internal sealed class OcrScanEffect : Control
         EndPoint = new RelativePoint(1, .5, RelativeUnit.Relative),
         GradientStops =
         [
-            new(Color.FromArgb(0, 48, 174, 131), 0),
-            new(Color.FromArgb(2, 48, 174, 131), .2),
-            new(Color.FromArgb(8, 48, 174, 131), .45),
-            new(Color.FromArgb(20, 55, 184, 141), .7),
-            new(Color.FromArgb(38, 70, 199, 156), .9),
-            new(Color.FromArgb(48, 92, 216, 176), 1)
+            new(Color.FromArgb(0, 255, 122, 89), 0),
+            new(Color.FromArgb(2, 255, 122, 89), .2),
+            new(Color.FromArgb(8, 255, 122, 89), .45),
+            new(Color.FromArgb(20, 255, 130, 98), .7),
+            new(Color.FromArgb(38, 255, 144, 114), .9),
+            new(Color.FromArgb(48, 255, 160, 132), 1)
         ]
     }.ToImmutable();
     private static readonly IImmutableBrush Glow = new LinearGradientBrush
@@ -31,16 +31,16 @@ internal sealed class OcrScanEffect : Control
         EndPoint = new RelativePoint(1, .5, RelativeUnit.Relative),
         GradientStops =
         [
-            new(Color.FromArgb(0, 94, 215, 178), 0),
-            new(Color.FromArgb(6, 94, 215, 178), .2),
-            new(Color.FromArgb(26, 128, 232, 199), .4),
-            new(Color.FromArgb(55, 163, 243, 217), .5),
-            new(Color.FromArgb(26, 128, 232, 199), .6),
-            new(Color.FromArgb(6, 94, 215, 178), .8),
-            new(Color.FromArgb(0, 94, 215, 178), 1)
+            new(Color.FromArgb(0, 255, 160, 132), 0),
+            new(Color.FromArgb(6, 255, 160, 132), .2),
+            new(Color.FromArgb(26, 255, 178, 152), .4),
+            new(Color.FromArgb(55, 255, 200, 178), .5),
+            new(Color.FromArgb(26, 255, 178, 152), .6),
+            new(Color.FromArgb(6, 255, 160, 132), .8),
+            new(Color.FromArgb(0, 255, 160, 132), 1)
         ]
     }.ToImmutable();
-    private static readonly IImmutableBrush Beam = new SolidColorBrush(Color.FromArgb(150, 158, 236, 207)).ToImmutable();
+    private static readonly IImmutableBrush Beam = new SolidColorBrush(Color.FromArgb(150, 255, 206, 188)).ToImmutable();
     private static readonly IImmutableBrush EdgeFeather = new LinearGradientBrush
     {
         StartPoint = new RelativePoint(.5, 0, RelativeUnit.Relative),

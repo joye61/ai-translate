@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <ProjectReference Include="../AiTranslate.Core/AiTranslate.Core.csproj" />
     <ProjectReference Include="../AiTranslate.Ai/AiTranslate.Ai.csproj" />
   </ItemGroup>

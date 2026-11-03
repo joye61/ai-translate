@@ -14,11 +14,11 @@ internal sealed class VocabularyStoreSnapshot
 /// <summary>
 /// Thread-safe, atomic local persistent store for Vocabulary Notebooks, Entries, and FSRS Review Logs.
 /// </summary>
-public sealed class VocabularyService : IVocabularyService
+public sealed partial class VocabularyService : IVocabularyService
 {
     private readonly string _storagePath;
     private readonly object _gate = new();
-    private readonly VocabularyStoreSnapshot _store;
+    private VocabularyStoreSnapshot _store;
 
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -43,6 +43,22 @@ public sealed class VocabularyService : IVocabularyService
         lock (_gate)
         {
             return _store.Notebooks.OrderByDescending(n => n.IsSystemDefault).ThenBy(n => n.CreatedAt).ToArray();
+        }
+    }
+
+    // Look only at saved terminology matching this text and language. Notes, screenshots
+    // and unrelated notebook entries must never be sent as model context.
+    public IReadOnlyList<CollocationItem> FindGlossaryTerms(string text, string targetLanguage)
+    {
+        lock (_gate)
+        {
+            return _store.Entries
+                .Where(e => e.ItemType is VocabularyItemType.TechnicalTerm or VocabularyItemType.Phrase or VocabularyItemType.Idiom
+                    && e.TargetLanguage == targetLanguage && e.Headword.Length is > 0 and <= 100
+                    && e.Translation.Length is > 0 and <= 240 && e.Headword != text
+                    && DictionaryTextMatch.IndexOf(text, e.Headword, comparison: StringComparison.Ordinal) >= 0)
+                .OrderByDescending(e => e.Headword.Length).ThenBy(e => e.Headword, StringComparer.Ordinal)
+                .Select(e => new CollocationItem(e.Headword, e.Translation)).Distinct().Take(8).ToArray();
         }
     }
 
@@ -202,8 +218,7 @@ public sealed class VocabularyService : IVocabularyService
                 AccentColorHex = accentHex,
                 CreatedAt = DateTimeOffset.UtcNow
             };
-            _store.Notebooks.Add(created);
-            PersistLocked();
+            CommitOrganization([.. _store.Notebooks, created], _store.Entries);
         }
         Changed?.Invoke(this, EventArgs.Empty);
         return created;
@@ -220,29 +235,58 @@ public sealed class VocabularyService : IVocabularyService
         ArgumentNullException.ThrowIfNull(result);
         var now = DateTimeOffset.UtcNow;
         var headword = result.SourceText.Trim();
+        var grammarNotes = GetGrammarNotes(result);
         VocabularyEntry saved;
 
         lock (_gate)
         {
-            var index = _store.Entries.FindIndex(e => string.Equals(e.Headword, headword, StringComparison.OrdinalIgnoreCase));
+            notebookId = ResolveNotebookId(notebookId);
+            var index = _store.Entries.FindIndex(e => e.NotebookId == notebookId &&
+                MatchesDictionary(e, headword, result.TargetLanguage, result.LookupContext));
+            var entries = new List<VocabularyEntry>(_store.Entries);
             if (index >= 0)
             {
                 var current = _store.Entries[index];
+                if (result.CacheStamp is { } stamp && stamp.Revision < current.DictionaryRevision)
+                    return current;
+                var translation = string.IsNullOrWhiteSpace(result.PrimaryTranslation) ? current.Translation : result.PrimaryTranslation;
                 var mergedTags = current.Tags.Concat(result.SuggestedTags).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 saved = current with
                 {
-                    Translation = string.IsNullOrWhiteSpace(result.PrimaryTranslation) ? current.Translation : result.PrimaryTranslation,
+                    DictionaryContext = result.LookupContext,
+                    DictionaryRevision = result.CacheStamp?.Revision ?? current.DictionaryRevision,
+                    Translation = translation,
+                    TranslationDecisions = result.TranslationDecisions.Count == 0 && current.Translation == translation &&
+                        current.TargetLanguage == result.TargetLanguage ? current.TranslationDecisions : result.TranslationDecisions,
                     UkPhonetic = string.IsNullOrWhiteSpace(result.UkPhonetic) ? current.UkPhonetic : result.UkPhonetic!,
                     UsPhonetic = string.IsNullOrWhiteSpace(result.UsPhonetic) ? current.UsPhonetic : result.UsPhonetic!,
-                    Senses = result.Senses.Count > 0 ? result.Senses : current.Senses,
-                    Inflections = result.Inflections.Count > 0 ? result.Inflections : current.Inflections,
+                    Senses = MergeRecapturedSenses(result.Senses, current.Senses),
+                    Pronunciation = string.IsNullOrWhiteSpace(result.Pronunciation) ? current.Pronunciation : result.Pronunciation,
+                    CommonMistakes = string.IsNullOrWhiteSpace(result.CommonMistakes) ? current.CommonMistakes : result.CommonMistakes,
+                    WordChoice = string.IsNullOrWhiteSpace(result.WordChoice) ? current.WordChoice : result.WordChoice,
+                    UsageContrasts = result.UsageContrasts.Count > 0 ? result.UsageContrasts : current.UsageContrasts,
+                    Variants = result.Variants.Count > 0 ? result.Variants : current.Variants,
+                    KeyPoints = result.KeyPoints.Count > 0 ? result.KeyPoints : current.KeyPoints,
+                    Alignment = result.Alignment.Count > 0 ? result.Alignment : current.Alignment,
+                    Clauses = result.Clauses.Count > 0 ? result.Clauses : current.Clauses,
+                    Tone = result.Tone ?? current.Tone,
+                    LiteralMeaning = string.IsNullOrWhiteSpace(result.LiteralMeaning) ? current.LiteralMeaning : result.LiteralMeaning,
+                    CulturalNote = string.IsNullOrWhiteSpace(result.CulturalNote) ? current.CulturalNote : result.CulturalNote,
+                    Domains = result.Domains.Count > 0 ? result.Domains : current.Domains,
+                    Morphemes = result.Morphemes.Count > 0 ? result.Morphemes : current.Morphemes,
+                    SynonymNuances = result.SynonymNuances.Count > 0 ? result.SynonymNuances : current.SynonymNuances,
+                    Mistakes = result.Mistakes.Count > 0 ? result.Mistakes : current.Mistakes,
+                    Inflections = result.Inflections.Count > 0 ? result.Inflections :
+                        current.Inflections.Where(f => !result.WordFamily.Any(r => r.Value == f.Value && r.Label == f.Label)).ToArray(),
+                    WordFamily = MergeRecapturedFamily(result.WordFamily, current.WordFamily),
                     Collocations = result.Collocations.Count > 0 ? result.Collocations : current.Collocations,
                     Examples = result.Examples.Count > 0 ? result.Examples : current.Examples,
                     Synonyms = result.Synonyms.Count > 0 ? result.Synonyms : current.Synonyms,
                     Antonyms = result.Antonyms.Count > 0 ? result.Antonyms : current.Antonyms,
                     EtymologyAndRoot = !string.IsNullOrWhiteSpace(result.EtymologyAndRoot) ? result.EtymologyAndRoot! : current.EtymologyAndRoot,
                     MemoryMnemonic = !string.IsNullOrWhiteSpace(result.MemoryMnemonic) ? result.MemoryMnemonic! : current.MemoryMnemonic,
-                    GrammarOrUsageNote = !string.IsNullOrWhiteSpace(result.GrammarBreakdown) ? result.GrammarBreakdown! : current.GrammarOrUsageNote,
+                    GrammarOrUsageNote = grammarNotes.Length > 0 ? grammarNotes : current.GrammarOrUsageNote,
+                    GrammarHighlights = result.GrammarHighlights.Count > 0 ? result.GrammarHighlights : current.GrammarHighlights,
                     ContextSentence = !string.IsNullOrWhiteSpace(contextSentence) ? contextSentence!.Trim() : current.ContextSentence,
                     ContextTranslation = !string.IsNullOrWhiteSpace(result.ContextMeaning) ? result.ContextMeaning! : current.ContextTranslation,
                     UserPersonalNote = !string.IsNullOrWhiteSpace(userNote) ? userNote.Trim() : current.UserPersonalNote,
@@ -250,30 +294,17 @@ public sealed class VocabularyService : IVocabularyService
                     LookupCount = current.LookupCount + 1,
                     UpdatedAt = now
                 };
-                _store.Entries[index] = saved;
+                entries[index] = saved;
             }
             else
             {
-                saved = new VocabularyEntry
+                saved = ApplyDictionary(new VocabularyEntry
                 {
                     Id = $"voc_{Guid.NewGuid():N}"[..16],
                     Headword = headword,
                     Translation = result.PrimaryTranslation,
-                    NotebookId = string.IsNullOrWhiteSpace(notebookId) ? "default" : notebookId,
-                    ItemType = result.ItemType,
-                    SourceLanguage = result.DetectedSourceLanguage,
-                    TargetLanguage = result.TargetLanguage,
-                    UkPhonetic = result.UkPhonetic ?? "",
-                    UsPhonetic = result.UsPhonetic ?? "",
-                    Senses = result.Senses,
-                    Inflections = result.Inflections,
-                    Collocations = result.Collocations,
-                    Examples = result.Examples,
-                    Synonyms = result.Synonyms,
-                    Antonyms = result.Antonyms,
-                    EtymologyAndRoot = result.EtymologyAndRoot ?? "",
-                    MemoryMnemonic = result.MemoryMnemonic ?? "",
-                    GrammarOrUsageNote = string.Join("\n", new[] { result.GrammarBreakdown, result.UsageNotes }.Where(s => !string.IsNullOrWhiteSpace(s))),
+                    NotebookId = notebookId,
+                    DictionaryContext = result.LookupContext,
                     UserPersonalNote = userNote.Trim(),
                     ContextSentence = contextSentence?.Trim() ?? (result.Examples.FirstOrDefault()?.SourceSentence ?? ""),
                     ContextTranslation = result.ContextMeaning ?? (result.Examples.FirstOrDefault()?.TranslatedSentence ?? ""),
@@ -288,10 +319,10 @@ public sealed class VocabularyService : IVocabularyService
                     CreatedAt = now,
                     UpdatedAt = now,
                     NextReviewAt = now
-                };
-                _store.Entries.Insert(0, saved);
+                }, result, result.CacheStamp?.Revision ?? 0);
+                entries.Insert(0, saved);
             }
-            PersistLocked();
+            CommitOrganization(_store.Notebooks, entries);
         }
         Changed?.Invoke(this, EventArgs.Empty);
         return saved;
@@ -329,8 +360,9 @@ public sealed class VocabularyService : IVocabularyService
     {
         lock (_gate)
         {
-            if (_store.Entries.RemoveAll(e => e.Id == entryId) == 0) return;
-            PersistLocked();
+            var entries = _store.Entries.Where(e => e.Id != entryId).ToList();
+            if (entries.Count == _store.Entries.Count) return;
+            CommitOrganization(_store.Notebooks, entries);
         }
         Changed?.Invoke(this, EventArgs.Empty);
     }
@@ -388,13 +420,15 @@ public sealed class VocabularyService : IVocabularyService
         var count = 0;
         lock (_gate)
         {
-            foreach (var entry in imported)
+            foreach (var sourceEntry in imported)
             {
+                var entry = sourceEntry with { NotebookId = ResolveNotebookId(sourceEntry.NotebookId) };
                 if (string.IsNullOrWhiteSpace(entry.Headword)) continue;
-                var idx = _store.Entries.FindIndex(e => string.Equals(e.Headword, entry.Headword, StringComparison.OrdinalIgnoreCase));
+                var idx = _store.Entries.FindIndex(e => e.NotebookId == entry.NotebookId &&
+                    MatchesDictionary(e, entry.Headword, entry.TargetLanguage, entry.GetDictionaryContext()));
                 if (idx >= 0)
                 {
-                    _store.Entries[idx] = entry;
+                    _store.Entries[idx] = entry with { Id = _store.Entries[idx].Id };
                 }
                 else
                 {
@@ -423,7 +457,13 @@ public sealed class VocabularyService : IVocabularyService
                 var json = File.ReadAllText(_storagePath, Encoding.UTF8);
                 var loaded = JsonSerializer.Deserialize<VocabularyStoreSnapshot>(json, JsonOptions);
                 if (loaded is { Notebooks.Count: > 0 })
+                {
+                    var ids = loaded.Notebooks.Select(n => n.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    for (var i = 0; i < loaded.Entries.Count; i++)
+                        if (!ids.Contains(loaded.Entries[i].NotebookId))
+                            loaded.Entries[i] = loaded.Entries[i] with { NotebookId = "default" };
                     return loaded;
+                }
             }
         }
         catch
@@ -446,14 +486,19 @@ public sealed class VocabularyService : IVocabularyService
     {
         try
         {
-            var dir = Path.GetDirectoryName(_storagePath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            var tempPath = _storagePath + ".tmp";
-            File.WriteAllText(tempPath, JsonSerializer.Serialize(_store, JsonOptions), Encoding.UTF8);
-            File.Move(tempPath, _storagePath, overwrite: true);
+            WriteSnapshot(_store);
         }
         catch
         {
         }
+    }
+
+    private void WriteSnapshot(VocabularyStoreSnapshot snapshot)
+    {
+        var dir = Path.GetDirectoryName(_storagePath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        var tempPath = _storagePath + ".tmp";
+        File.WriteAllText(tempPath, JsonSerializer.Serialize(snapshot, JsonOptions), Encoding.UTF8);
+        File.Move(tempPath, _storagePath, overwrite: true);
     }
 }

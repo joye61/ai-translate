@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AiTranslate.Core;
 
 namespace AiTranslate.Ai;
 
@@ -53,7 +54,9 @@ public sealed partial class AiTranslationService
 {
     public const int MaxSourceLength = 16_000;
     public const int MaxResultLength = 64_000;
-    private readonly IAiTransport _transport;
+    private readonly IAiTransport? _transport;
+    private readonly IVerifiedTranslationCache? _cache;
+    private IAiTransport Transport => _transport ?? throw new AiException("请在「引擎与快捷键」中配置 AI 引擎后再翻译。");
 
     private const string PreservationInstructions = """
     翻译范围与语义保留规则（优先于笼统的“完整翻译”要求）：
@@ -68,19 +71,14 @@ public sealed partial class AiTranslationService
 
     public AiTranslationService(IAiTransport transport) => _transport = transport ?? throw new ArgumentNullException(nameof(transport));
 
-    public async Task<IReadOnlyList<TranslationRegionText>> TranslateRegionsAsync(
-        IReadOnlyList<TranslationSourceRegion> sourceRegions, string targetLanguageId, CancellationToken token)
+    public AiTranslationService(IAiTransport? transport, IVerifiedTranslationCache cache)
     {
-        token.ThrowIfCancellationRequested();
-        var language = TranslationLanguages.Get(targetLanguageId);
-        ArgumentNullException.ThrowIfNull(sourceRegions);
-        var regions = sourceRegions.ToArray();
-        return await TranslateVerifiedAsync(regions, language,
-            retry => TranslateRegionsCoreAsync(regions, language.Id, retry, token), token).ConfigureAwait(false);
+        _transport = transport;
+        _cache = cache;
     }
 
-    private async Task<IReadOnlyList<TranslationRegionText>> TranslateRegionsCoreAsync(
-        IReadOnlyList<TranslationSourceRegion> sourceRegions, string targetLanguageId, bool retry, CancellationToken token)
+    public async Task<IReadOnlyList<TranslationRegionText>> TranslateRegionsAsync(
+        IReadOnlyList<TranslationSourceRegion> sourceRegions, string targetLanguageId, CancellationToken token, bool forceRefresh = false)
     {
         token.ThrowIfCancellationRequested();
         var language = TranslationLanguages.Get(targetLanguageId);
@@ -98,6 +96,13 @@ public sealed partial class AiTranslationService
         }
         if (sourceLength > MaxSourceLength) throw new AiException($"选区文字超过 {MaxSourceLength:N0} 字符，请缩小选区后翻译。");
 
+        return await TranslateWithCacheAsync(regions, language, "regions", forceRefresh,
+            retry => TranslateRegionsCoreAsync(regions, ids, language, retry, token), token).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<TranslationRegionText>> TranslateRegionsCoreAsync(
+        TranslationSourceRegion[] regions, HashSet<string> ids, TranslationLanguage language, bool retry, CancellationToken token)
+    {
         var messages = new JsonObject[]
         {
             new()
@@ -124,7 +129,7 @@ public sealed partial class AiTranslationService
 
         var responseLimit = MaxResultLength * 6 + regions.Length * 600 + 64;
         var streamedLength = 0;
-        var reply = await _transport.CompleteAsync(messages, [], delta =>
+        var reply = await Transport.CompleteAsync(messages, [], delta =>
         {
             token.ThrowIfCancellationRequested();
             if (delta.Length > responseLimit - streamedLength) throw ResultTooLong();
@@ -164,21 +169,20 @@ public sealed partial class AiTranslationService
         catch (JsonException) { throw InvalidRegionResult(); }
     }
 
-    public async Task<string> TranslateAsync(string sourceText, string targetLanguageId, CancellationToken token)
-    {
-        token.ThrowIfCancellationRequested();
-        var language = TranslationLanguages.Get(targetLanguageId);
-        var result = await TranslateVerifiedAsync([new("text", sourceText)], language, async retry =>
-            [new TranslationRegionText("text", await TranslateTextCoreAsync(sourceText, language.Id, retry, token).ConfigureAwait(false))], token).ConfigureAwait(false);
-        return result[0].Text;
-    }
-
-    private async Task<string> TranslateTextCoreAsync(string sourceText, string targetLanguageId, bool retry, CancellationToken token)
+    public async Task<string> TranslateAsync(string sourceText, string targetLanguageId, CancellationToken token, bool forceRefresh = false)
     {
         token.ThrowIfCancellationRequested();
         var language = TranslationLanguages.Get(targetLanguageId);
         if (string.IsNullOrWhiteSpace(sourceText)) throw new AiException("没有可翻译的文字，请输入或选择文字后重试。");
         if (sourceText.Length > MaxSourceLength) throw new AiException($"文字超过 {MaxSourceLength:N0} 字符，请分段翻译。");
+        var result = await TranslateWithCacheAsync([new("text", sourceText)], language, "text", forceRefresh, async retry =>
+            [new TranslationRegionText("text", await TranslateTextCoreAsync(sourceText, language, retry, token).ConfigureAwait(false))], token).ConfigureAwait(false);
+        return result[0].Text;
+    }
+
+    private async Task<string> TranslateTextCoreAsync(string sourceText, TranslationLanguage language, bool retry, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
 
         var messages = new JsonObject[]
         {
@@ -201,7 +205,7 @@ public sealed partial class AiTranslationService
         };
 
         var streamedLength = 0;
-        var reply = await _transport.CompleteAsync(messages, [], delta =>
+        var reply = await Transport.CompleteAsync(messages, [], delta =>
         {
             token.ThrowIfCancellationRequested();
             if (delta.Length > MaxResultLength - streamedLength) throw ResultTooLong();

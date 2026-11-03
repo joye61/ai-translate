@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24" width="512" height="512">
+  <title>AI Translate · 双语词典</title>
+  <defs>
+    <!-- Outer cover of mdi-book-variant, mdi-translate and mdi-bookmark. -->
+    <path id="cover" d="M18,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V4A2,2 0 0,0 18,2Z"/>
+    <path id="translate" d="M12.87,15.07L10.33,12.56L10.36,12.53C12.1,10.59 13.34,8.36 14.07,6H17V4H10V2H8V4H1V6H12.17C11.5,7.92 10.44,9.75 9,11.35C8.07,10.32 7.3,9.19 6.69,8H4.69C5.42,9.63 6.42,11.17 7.67,12.56L2.58,17.58L4,19L9,14L12.11,17.11L12.87,15.07M18.5,10H16.5L12,22H14L15.12,19H19.87L21,22H23L18.5,10M15.88,17L17.5,12.67L19.12,17H15.88Z"/>
+    <path id="ribbon" d="M17,3H7A2,2 0 0,0 5,5V21L12,18L19,21V5C19,3.89 18.1,3 17,3Z"/>
+    <clipPath id="trim"><use xlink:href="#cover"/></clipPath>
+    <linearGradient id="cloth" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#FF916F"/><stop offset=".49" stop-color="#F76E50"/><stop offset="1" stop-color="#DB5038"/>
+    </linearGradient>
+    <linearGradient id="binding">
+      <stop stop-color="#A83527"/><stop offset=".23" stop-color="#D84D36"/><stop offset=".76" stop-color="#EB6045"/>
+      <stop offset=".91" stop-color="#B33C2C"/><stop offset="1" stop-color="#FF9B7B"/>
+    </linearGradient>
+    <linearGradient id="paper">
+      <stop stop-color="#C19D7E"/><stop offset=".16" stop-color="#F3DABC"/><stop offset=".5" stop-color="#FFF3DE"/>
+      <stop offset="1" stop-color="#E4C6A1"/>
+    </linearGradient>
+  </defs>
+  <g transform="rotate(-9 12 12)">
+    <!-- Back board and staggered leaves give the book a readable fore-edge. -->
+    <g transform="translate(-.6 .15) scale(1 .86)">
+      <use xlink:href="#cover" transform="translate(1 2.35)" fill="#9E392C"/>
+      <use xlink:href="#cover" transform="translate(.93 2)" fill="#C5523F"/>
+      <use xlink:href="#cover" transform="translate(.83 1.76)" fill="url(#paper)"/>
+      <use xlink:href="#cover" transform="translate(.70 1.43)" fill="#E8CAAA"/>
+      <use xlink:href="#cover" transform="translate(.65 1.30)" fill="url(#paper)"/>
+      <use xlink:href="#ribbon" transform="translate(13.3 18.1) scale(.225 .40)" fill="#843A32"/>
+      <use xlink:href="#cover" transform="translate(.43 .86)" fill="#FFF1DA"/>
+      <use xlink:href="#cover" transform="translate(.15 .35)" fill="#AB402F"/>
+      <use xlink:href="#cover" fill="url(#cloth)"/>
+      <g clip-path="url(#trim)">
+        <rect x="4" y="2" width="2.35" height="20" fill="url(#binding)"/>
+        <rect x="4.12" y="4.5" width="1.69" height=".17" rx=".08" fill="#FFC2A0"/>
+        <rect x="4.12" y="19.2" width="1.69" height=".17" rx=".08" fill="#FFC2A0"/>
+        <use xlink:href="#cover" fill="none" stroke="#FFD0B9" stroke-opacity=".47" stroke-width=".17"/>
+      </g>
+      <!-- A shallow deboss under the cream foil. -->
+      <use xlink:href="#translate" transform="translate(6.70 4.28) scale(.54 .66)" fill="#C84F39"/>
+      <use xlink:href="#translate" transform="translate(6.70 4.08) scale(.54 .66)" fill="#FFF5E4"/>
+    </g>
+  </g>
+</svg>

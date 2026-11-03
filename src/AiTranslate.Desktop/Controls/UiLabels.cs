@@ -14,7 +14,8 @@ public static class UiLabels
     {
         VocabularyItemType.Word => "单词",
         VocabularyItemType.Phrase => "短语",
-        VocabularyItemType.Sentence => "长句",
+        VocabularyItemType.Sentence => "句子",
+        VocabularyItemType.Paragraph => "段落",
         VocabularyItemType.Idiom => "习语",
         VocabularyItemType.TechnicalTerm => "专业术语",
         _ => type.ToString()
@@ -50,6 +51,6 @@ public static class UiLabels
 
     /// <summary>Resolves a language id to its Chinese display name without throwing on unrecognized/"auto" ids.</summary>
     public static string Language(string id) =>
-        TranslationLanguages.All.FirstOrDefault(l => string.Equals(l.Id, id, System.StringComparison.OrdinalIgnoreCase))?.ChineseName
-        ?? id;
+        string.Equals(id, "zh", StringComparison.OrdinalIgnoreCase) ? "中文" :
+            DictionaryTranslationDirection.FromSourceCode(id)?.ChineseName ?? id;
 }

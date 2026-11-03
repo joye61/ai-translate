@@ -88,7 +88,7 @@ public sealed partial class AiTranslationService
         ];
         var limit = Math.Min(MaxResultLength, regions.Count * 600 + 64);
         var streamed = 0;
-        var reply = await _transport.CompleteAsync(messages, [], delta =>
+        var reply = await Transport.CompleteAsync(messages, [], delta =>
         {
             token.ThrowIfCancellationRequested();
             if (delta.Length > limit - streamed) throw InvalidReview();

@@ -1,8 +1,27 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <ApplicationIcon>Assets/Brand/windows/ai-translate.ico</ApplicationIcon>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
   </PropertyGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="Assets/Brand/windows/*.ico;Assets/Brand/macos/TrayTemplate@2x.png;Assets/Brand/linux/tray.png;Assets/Brand/linux/hicolor/256x256/apps/ai-translate.png" />
+    <Content Include="Assets/Brand/LICENSE-MDI.txt" Link="licenses/LICENSE-MDI.txt" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('linux-'))">
+    <Content Include="Assets/Brand/linux/ai-translate.desktop" Link="share/applications/ai-translate.desktop" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets/Brand/linux/hicolor/**/*" Link="share/icons/hicolor/%(RecursiveDir)%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets/Brand/ai-translate.svg" Link="share/icons/hicolor/scalable/apps/ai-translate.svg" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!-- Keep native libraries and offline models beside the apphost inside the Finder bundle. -->
+  <Target Name="LayoutMacAppBundle" AfterTargets="ComputeFilesToPublish"
+          Condition="$(RuntimeIdentifier.StartsWith('osx-')) And '$(UseAppHost)' != 'false'">
+    <ItemGroup>
+      <ResolvedFileToPublish Update="@(ResolvedFileToPublish)" RelativePath="AI Translate.app/Contents/MacOS/%(ResolvedFileToPublish.RelativePath)" />
+      <ResolvedFileToPublish Include="Assets/Brand/macos/Info.plist" RelativePath="AI Translate.app/Contents/Info.plist" CopyToPublishDirectory="PreserveNewest" />
+      <ResolvedFileToPublish Include="Assets/Brand/macos/ai-translate.icns" RelativePath="AI Translate.app/Contents/Resources/ai-translate.icns" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
   <ItemGroup>
     <ProjectReference Include="../AiTranslate.Core/AiTranslate.Core.csproj" />
     <ProjectReference Include="../AiTranslate.Ai/AiTranslate.Ai.csproj" />

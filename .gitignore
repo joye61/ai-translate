@@ -7,3 +7,4 @@ obj/
 artifacts/
 *.log
 TestResults/
+/kokoro.onnx

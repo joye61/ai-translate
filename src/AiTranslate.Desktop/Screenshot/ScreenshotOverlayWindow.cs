@@ -2,6 +2,7 @@ using System.Diagnostics;
 using AiTranslate.Ai;
 using AiTranslate.Core;
 using AiTranslate.Ocr;
+using AiTranslate.Vocabulary;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -57,7 +58,7 @@ internal sealed class ScreenshotOverlayWindow : Window
     private byte[]? _croppedPng;
     private OcrResult? _ocrResult;
     private IReadOnlyList<TranslationRegion> _regions = [];
-    private readonly Dictionary<string, IReadOnlyList<TranslationRegionText>> _cachedTranslations = [];
+    private readonly IVerifiedTranslationCache _translationCache = new DictionaryEntryCache();
     private TranslationImage? _composedImage;
     private string? _sourceText;
     private string? _translatedFullText;
@@ -115,10 +116,11 @@ internal sealed class ScreenshotOverlayWindow : Window
 
         var hintContainer = new Border
         {
-            Background = AppTheme.Frozen(0xE8101722),
-            BorderBrush = AppTheme.BorderStrong,
+            Background = AppTheme.Frozen(0xF2FFFFFF),
+            BorderBrush = AppTheme.BorderSubtle,
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(999),
+            CornerRadius = new CornerRadius(AppTheme.Radius.Pill),
+            BoxShadow = AppTheme.PopupShadow,
             Padding = new Thickness(22, 10),
             IsHitTestVisible = false,
             Child = new StackPanel
@@ -205,10 +207,11 @@ internal sealed class ScreenshotOverlayWindow : Window
 
         _toolbar = new Border
         {
-            Background = AppTheme.Frozen(0xF5111823),
-            BorderBrush = AppTheme.BorderStrong,
+            Background = AppTheme.Frozen(0xF7FFFFFF),
+            BorderBrush = AppTheme.BorderSubtle,
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(12),
+            CornerRadius = new CornerRadius(AppTheme.Radius.L),
+            BoxShadow = AppTheme.PopupShadow,
             Padding = new Thickness(8, 6),
             IsVisible = false,
             Cursor = new Cursor(StandardCursorType.Arrow),
@@ -251,7 +254,7 @@ internal sealed class ScreenshotOverlayWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _cts?.Cancel();
-        _cts?.Dispose();
+        _cts = null;
         _composedImage?.Dispose();
         _screenBitmap.Dispose();
         _onClosed();
@@ -357,14 +360,11 @@ internal sealed class ScreenshotOverlayWindow : Window
             // "重新识别并翻译" promises a fresh OCR pass, not just a re-translation of stale regions.
             _ocrResult = null;
             _regions = [];
-            _cachedTranslations.Clear();
         }
         _cts?.Cancel();
-        // Do not dispose the superseded CTS here: a still-in-flight previous call may be about to
-        // link/register against its token (e.g. inside RecognizeAsync), which would throw
-        // ObjectDisposedException. Cancelling is enough; the old instance is now unreferenced and GC-eligible.
-        _cts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
-        var token = _cts.Token;
+        using var request = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        _cts = request;
+        var token = request.Token;
 
         _busy = true;
         _showingOriginal = false;
@@ -379,41 +379,25 @@ internal sealed class ScreenshotOverlayWindow : Window
 
             if (_ocrResult is null)
             {
-                _ocrResult = await _ocr.RecognizeAsync(_croppedPng, token);
-                if (string.IsNullOrWhiteSpace(_ocrResult.Text))
+                var ocr = await _ocr.RecognizeAsync(_croppedPng, token);
+                if (string.IsNullOrWhiteSpace(ocr.Text))
                     throw new AiException("选区中未识别到可翻译的文字，请按 Esc 重新框选。");
-                _sourceText = _ocrResult.Text;
-                _regions = await Task.Run(() =>
-                    TranslationLayout.CreateRegions(_ocrResult, TranslationTableLayout.FindCells(_croppedPng, _ocrResult)), token);
+                var regions = await Task.Run(() =>
+                    TranslationLayout.CreateRegions(ocr, TranslationTableLayout.FindCells(_croppedPng, ocr)), token);
+                token.ThrowIfCancellationRequested();
+                _ocrResult = ocr;
+                _sourceText = ocr.Text;
+                _regions = regions;
             }
 
-            if (!_cachedTranslations.TryGetValue(languageId, out var regionTexts))
-            {
-                var lang = TranslationLanguages.Get(languageId);
-                UpdateToolbarState($"正在使用 AI 原位翻译为 {lang.DisplayName}…");
-                var transport = _settings.CreateTransport();
-                if (transport is not null)
-                {
-                    try
-                    {
-                        var service = new AiTranslationService(transport);
-                        regionTexts = await service.TranslateRegionsAsync(
-                            _regions.Select(r => new TranslationSourceRegion(r.Id, r.Text)).ToArray(),
-                            languageId,
-                            token);
-                    }
-                    finally { (transport as IDisposable)?.Dispose(); }
-                }
-                else
-                {
-                    regionTexts = _regions.Select(r => new TranslationRegionText(
-                        r.Id,
-                        BuiltInShowcaseLexicon.TryGet(r.Text.Trim(), out var dict)
-                            ? dict.PrimaryTranslation
-                            : $"[{lang.ChineseName}] {r.Text}")).ToArray();
-                }
-                _cachedTranslations[languageId] = regionTexts;
-            }
+            var lang = TranslationLanguages.Get(languageId);
+            UpdateToolbarState($"正在原位翻译为 {lang.DisplayName}…");
+            var transport = _settings.CreateTransport();
+            using var ownedTransport = transport as IDisposable;
+            var service = new AiTranslationService(transport, _translationCache);
+            var regionTexts = await service.TranslateRegionsAsync(
+                _regions.Select(r => new TranslationSourceRegion(r.Id, r.Text)).ToArray(), languageId, token, forceRefresh: forceRetry);
+            token.ThrowIfCancellationRequested();
 
             _composedImage?.Dispose();
             var rtl = TranslationLanguages.Get(languageId).IsRightToLeft;
@@ -427,15 +411,21 @@ internal sealed class ScreenshotOverlayWindow : Window
         }
         catch (OperationCanceledException)
         {
+            if (_cts != request) return;
             _scanEffect.Stop();
             _busy = false;
             UpdateToolbarState("已取消或超时，请点击重试。", isError: true);
         }
         catch (Exception ex)
         {
+            if (_cts != request) return;
             _scanEffect.Stop();
             _busy = false;
             UpdateToolbarState(ex.Message, isError: true);
+        }
+        finally
+        {
+            if (_cts == request) _cts = null;
         }
     }
 
@@ -556,10 +546,11 @@ internal sealed class ScreenshotOverlayWindow : Window
         var bg = isPrimary ? AppTheme.Accent : Brushes.Transparent;
         var btn = new Button
         {
+            Classes = { isPrimary ? "primary" : "ghost" },
             Width = 34,
             Height = 32,
             Padding = new Thickness(0),
-            CornerRadius = new CornerRadius(6),
+            CornerRadius = new CornerRadius(AppTheme.Radius.S),
             Background = bg,
             BorderThickness = new Thickness(0),
             HorizontalContentAlignment = HorizontalAlignment.Center,

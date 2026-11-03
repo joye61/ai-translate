@@ -5,612 +5,344 @@ using AiTranslate.Speech;
 using AiTranslate.Vocabulary;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Controls.Templates;
-using Avalonia.Input;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 
 namespace AiTranslate.Desktop.Views;
 
-/// <summary>
-/// Cognitive Linguistic Studio View (查词与 AI 语境精翻工作台).
-/// Replaces cramped legacy dictionary UIs with an Omni-Command Bar + 2-Column Bento Matrix + KokoroSharp Phonics Studio.
-/// </summary>
 public sealed class DictionaryStudioView : UserControl
 {
+    private const double ReadingWidth = 760;
     private readonly IAiDictionaryService _dictionaryService;
     private readonly IVocabularyService _vocabularyService;
-    private readonly ISpeechSynthesisService _speechService;
-    private readonly AppSettingsStore _settingsStore;
+    private readonly ISpeechSynthesisService _speech;
+    private readonly AppSettingsStore _settings;
     private readonly Action<string> _setStatus;
-    private readonly Func<Task> _onStartScreenshotTranslate;
-    private readonly Func<Task> _onReadClipboardTranslate;
+    private readonly DictionaryComposer _composer;
+    private readonly ScrollViewer _scroll;
+    private readonly Control _welcome;
+    private CancellationTokenSource? _lookup;
+    private sealed record Reading(DictionaryEntryResult Entry, string? Context, TranslationTriggerSource Source, string Title,
+        DictionaryDisclosures Disclosures);
+    private readonly List<(Reading Reading, Vector Offset)> _history = [];
+    private Reading? _current;
+    private NotebookCollection? _collection;
+    private string? _notebookId;
 
-    private readonly TextBox _inputBox;
-    private readonly TextBox _contextBox;
-    private readonly ComboBox _targetLangCombo;
-    private readonly ComboBox _targetNotebookCombo;
-    private readonly StackPanel _bentoStage;
-    private CancellationTokenSource? _lookupCts;
-
-    public DictionaryStudioView(
-        IAiDictionaryService dictionaryService,
-        IVocabularyService vocabularyService,
-        ISpeechSynthesisService speechService,
-        AppSettingsStore settingsStore,
-        Action<string> setStatus,
-        Func<Task> onStartScreenshotTranslate,
-        Func<Task> onReadClipboardTranslate)
+    public DictionaryStudioView(IAiDictionaryService dictionaryService, IVocabularyService vocabularyService,
+        ISpeechSynthesisService speechService, AppSettingsStore settingsStore, Action<string> setStatus)
     {
         _dictionaryService = dictionaryService;
         _vocabularyService = vocabularyService;
-        _speechService = speechService;
-        _settingsStore = settingsStore;
+        _speech = speechService;
+        _settings = settingsStore;
         _setStatus = setStatus;
-        _onStartScreenshotTranslate = onStartScreenshotTranslate;
-        _onReadClipboardTranslate = onReadClipboardTranslate;
+        _composer = new DictionaryComposer(_settings,
+            query => _ = LookupAsync(query, null, TranslationTriggerSource.ManualInput, "手动查询"), StopLookup);
 
-        _inputBox = new TextBox
+        _scroll = new ScrollViewer
         {
-            PlaceholderText = "输入单词、短语、习语、专业术语或长难句（按 Enter 或 Ctrl+Enter 启动 AI 深度语义解析）…",
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            MinHeight = 68,
-            MaxHeight = 130,
-            FontSize = 15.5,
-            Background = AppTheme.InputBg,
-            Foreground = AppTheme.TextPrimary,
-            BorderBrush = AppTheme.BorderStrong,
-            CornerRadius = new CornerRadius(12),
-            Padding = new Thickness(16, 12)
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Padding = new Thickness(AppTheme.Space.XXL, AppTheme.Space.L, AppTheme.Space.XXL, AppTheme.Space.XXXL)
         };
-        _inputBox.KeyDown += (_, e) =>
+        var samples = new WrapPanel
         {
-            if (e.Key == Key.Enter && (e.KeyModifiers.HasFlag(KeyModifiers.Control) || !(_inputBox.Text ?? "").Contains('\n')))
-            {
-                e.Handled = true;
-                _ = LookupAsync(_inputBox.Text ?? "", _contextBox?.Text, TranslationTriggerSource.ManualInput, "工作台搜索");
-            }
+            HorizontalAlignment = HorizontalAlignment.Center, ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S,
+            Margin = new Thickness(0, AppTheme.Space.S, 0, 0)
         };
-
-        _contextBox = new TextBox
+        foreach (var sample in new[] { "coffee", "hard", "take for granted", "The early bird catches the worm.", "举一反三" })
+            samples.Children.Add(CreateSampleChip(sample));
+        _welcome = new StackPanel
         {
-            PlaceholderText = "语境锚点（可选）：粘贴你在论文/源码/外刊中遇到该词的原句，AI 将精准剖析当前语境义并随生词卡片永久溯源保存",
-            FontSize = 12.5,
-            Background = AppTheme.InputBg,
-            Foreground = AppTheme.TextSecondary,
-            BorderBrush = AppTheme.BorderSubtle,
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(14, 8)
-        };
-
-        _targetLangCombo = new ComboBox
-        {
-            Width = 150,
-            CornerRadius = new CornerRadius(8),
-            ItemsSource = TranslationLanguages.All,
-            SelectedItem = TranslationLanguages.GetOrDefault(_settingsStore.Current.DefaultTargetLanguage),
-            ItemTemplate = new FuncDataTemplate<TranslationLanguage>((l, _) => new TextBlock { Text = l?.DisplayName })
-        };
-
-        _targetNotebookCombo = new ComboBox
-        {
-            Width = 195,
-            CornerRadius = new CornerRadius(8),
-            ItemTemplate = new FuncDataTemplate<VocabularyNotebook>((nb, _) => new TextBlock { Text = nb?.Name })
-        };
-
-        var sampleChips = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 6,
-            VerticalAlignment = VerticalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center,
+            MaxWidth = 560, Spacing = AppTheme.Space.M, Margin = new Thickness(AppTheme.Space.XXL),
             Children =
             {
-                new TextBlock { Text = "一键体验：", FontSize = 12, Foreground = AppTheme.TextMuted, VerticalAlignment = VerticalAlignment.Center }
-            }
-        };
-        foreach (var word in new[] { "serendipity", "ubiquitous", "ephemeral" })
-        {
-            var w = word;
-            var chip = new Button
-            {
-                Content = w,
-                FontSize = 12,
-                Padding = new Thickness(10, 4),
-                CornerRadius = new CornerRadius(999),
-                Background = AppTheme.CardElevatedBg,
-                Foreground = AppTheme.AccentBright,
-                BorderBrush = AppTheme.BorderSubtle,
-                BorderThickness = new Thickness(1)
-            };
-            chip.Click += (_, _) =>
-            {
-                _inputBox.Text = w;
-                _ = LookupAsync(w, null, TranslationTriggerSource.ManualInput, "精选词条");
-            };
-            sampleChips.Children.Add(chip);
-        }
-
-        var langSelectorRow = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 16,
-            VerticalAlignment = VerticalAlignment.Center,
-            Children =
-            {
-                new StackPanel
+                AppIcons.CreateLogo(56),
+                new TextBlock
                 {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 6,
-                    Children = { new MdiIcon("translate", 15, AppTheme.AccentBright), _targetLangCombo }
+                    Text = "查一个词，译一段话", TextAlignment = TextAlignment.Center, FontSize = AppTheme.Type.Headline,
+                    FontWeight = FontWeight.SemiBold, Foreground = AppTheme.TextPrimary, Margin = new Thickness(0, AppTheme.Space.XS, 0, 0)
                 },
-                new StackPanel
+                new TextBlock
                 {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 6,
-                    Children = { new MdiIcon("book-open-page-variant", 15, AppTheme.TextSecondary), _targetNotebookCombo }
-                }
+                    Text = "输入单词、词组或整段原文，AI 会逐步给出译义、用法、搭配与双语例句。", TextAlignment = TextAlignment.Center,
+                    TextWrapping = TextWrapping.Wrap, FontSize = AppTheme.Type.Body, LineHeight = 21, Foreground = AppTheme.TextSecondary
+                },
+                new TextBlock
+                {
+                    Text = "试试这些", TextAlignment = TextAlignment.Center, FontSize = AppTheme.Type.Caption,
+                    Foreground = AppTheme.TextMuted, Margin = new Thickness(0, AppTheme.Space.M, 0, 0)
+                },
+                samples
             }
         };
-
-        // A WrapPanel (rather than a fixed-column Grid) keeps the toolbar usable down to the
-        // window's MinWidth: controls reflow onto a second line instead of being clipped off-screen.
-        var controlsRow = new WrapPanel
+        var fade = new Border
         {
-            Children = { langSelectorRow, sampleChips }
+            Height = 28, VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false, Background = AppTheme.WindowFadeBottom,
+            Margin = new Thickness(0, 0, 12, 0)
         };
-        langSelectorRow.Margin = new Thickness(0, 0, 20, 8);
-        sampleChips.Margin = new Thickness(0, 0, 0, 8);
-
-        var actionButtonsRow = new WrapPanel
+        _composer.MaxWidth = ReadingWidth;
+        _composer.Margin = new Thickness(AppTheme.Space.XXL, 0, AppTheme.Space.XXL, AppTheme.Space.L);
+        Grid.SetRow(_composer, 1);
+        Content = new Grid
         {
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Children =
-            {
-                StudioUi.CreateSecondaryButton("clipboard-text-outline", "剪贴板精翻", () => _ = _onReadClipboardTranslate()),
-                StudioUi.CreateSecondaryButton("crop-free", "截图原位翻译", () => _ = _onStartScreenshotTranslate()),
-                StudioUi.CreatePrimaryButton("sparkles", "AI 深度解析", () =>
-                    _ = LookupAsync(_inputBox.Text ?? "", _contextBox.Text, TranslationTriggerSource.ManualInput, "手动查询"))
-            }
+            RowDefinitions = new RowDefinitions("*,Auto"),
+            Children = { _scroll, fade, _welcome, _composer }
         };
-        foreach (var child in actionButtonsRow.Children)
-            if (child is Control c) c.Margin = new Thickness(0, 0, 10, 0);
-
-        var commandDeck = StudioUi.CreateBentoCard(
-            new StackPanel { Spacing = 10, Children = { _inputBox, _contextBox, controlsRow, actionButtonsRow } },
-            padding: new Thickness(18, 16),
-            borderBrush: AppTheme.BorderStrong);
-        commandDeck.Margin = new Thickness(24, 20, 24, 12);
-
-        _bentoStage = new StackPanel
-        {
-            Spacing = 16,
-            Margin = new Thickness(24, 4, 24, 24)
-        };
-
-        var rootGrid = new Grid
-        {
-            RowDefinitions = new RowDefinitions("Auto,*"),
-            Children =
-            {
-                commandDeck,
-                new ScrollViewer { [Grid.RowProperty] = 1, Content = _bentoStage }
-            }
-        };
-
-        Content = rootGrid;
-        RefreshNotebooks();
     }
 
-    public void RefreshNotebooks()
+    private Button CreateSampleChip(string text)
     {
-        var notebooks = _vocabularyService.GetNotebooks();
-        var prevId = (_targetNotebookCombo.SelectedItem as VocabularyNotebook)?.Id ?? _settingsStore.Current.DefaultNotebookId;
-        _targetNotebookCombo.ItemsSource = notebooks;
-        _targetNotebookCombo.SelectedItem = notebooks.FirstOrDefault(n => n.Id == prevId) ?? notebooks.FirstOrDefault();
+        var chip = new Button
+        {
+            Classes = { "ghost" }, Background = AppTheme.CardBg, BorderBrush = AppTheme.BorderSubtle, BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(AppTheme.Radius.Pill), Padding = new Thickness(AppTheme.Space.M, AppTheme.Space.XS),
+            Content = new TextBlock { Text = text, FontSize = AppTheme.Type.Small, Foreground = AppTheme.TextSecondary }
+        };
+        ToolTip.SetTip(chip, $"查询 “{text}”");
+        chip.Click += (_, _) => _ = LookupAsync(text, null, TranslationTriggerSource.ManualInput, "手动查询");
+        return chip;
     }
 
-    public async Task LookupAsync(string query, string? contextSentence, TranslationTriggerSource source, string sourceTitle)
+    public void RefreshNotebooks(string? preferredId = null)
+    {
+        _notebookId = preferredId ?? _notebookId ?? _settings.Current.DefaultNotebookId;
+        _collection?.SetNotebooks(_vocabularyService.GetNotebooks(), _notebookId);
+    }
+
+    internal void FocusInput() => _composer.FocusInput();
+
+    public Task LookupAsync(string query, string? contextSentence, TranslationTriggerSource source, string sourceTitle) =>
+        RunLookupAsync(query, contextSentence, source, sourceTitle,
+            DictionaryTranslationDirection.ResolveTargetId(query, _composer.LanguageId ?? DictionaryTranslationDirection.GetMode(_settings.Current)));
+
+    private async Task RunLookupAsync(string query, string? contextSentence, TranslationTriggerSource source, string sourceTitle,
+        string language, DictionaryEntryResult? refreshing = null, bool linked = false)
     {
         if (string.IsNullOrWhiteSpace(query)) return;
-        _inputBox.Text = query.Trim();
-        if (!string.IsNullOrWhiteSpace(contextSentence))
-            _contextBox.Text = contextSentence.Trim();
-
-        _lookupCts?.Cancel();
-        _lookupCts?.Dispose();
-        _lookupCts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        var token = _lookupCts.Token;
-
-        var targetLangId = (_targetLangCombo.SelectedItem as TranslationLanguage)?.Id
-            ?? _settingsStore.Current.DefaultTargetLanguage;
-
-        _setStatus($"正在调用 AI 认知词典引擎深度解析「{Truncate(query.Trim(), 28)}」…");
-
+        query = query.Trim();
+        if (!linked && refreshing is null) _history.Clear();
+        StopLookup();
+        using var request = new CancellationTokenSource();
+        _lookup = request;
+        var page = BeginResult(query, language, contextSentence);
+        _composer.SetGenerating(true);
+        _setStatus("正在翻译…");
         try
         {
-            var result = await _dictionaryService.LookupOrTranslateAsync(
-                query.Trim(),
-                targetLangId,
-                contextSentence,
-                cancellationToken: token);
-
-            if (token.IsCancellationRequested) return;
-            DisplayResult(result, source, sourceTitle);
-            _setStatus($"已完成「{Truncate(result.SourceText, 24)}」的 AI 认知词典解析");
+            var result = await _dictionaryService.LookupOrTranslateAsync(query, language, contextSentence,
+                text => Dispatcher.UIThread.Post(() =>
+                {
+                    if (_lookup == request) page.ShowTranslation(text);
+                }), request.Token, partial => Dispatcher.UIThread.Post(() =>
+                {
+                    if (_lookup == request) page.ShowEntry(partial, complete: false);
+                }), forceRefresh: refreshing is not null);
+            if (_lookup == request) FinishResult(page, result, contextSentence, source, sourceTitle);
         }
-        catch (OperationCanceledException)
-        {
-        }
+        catch (OperationCanceledException) when (request.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            _setStatus($"查询异常：{ex.Message}");
+            if (_lookup == request)
+            {
+                if (refreshing is not null)
+                {
+                    page = BeginResult(query, language, contextSentence);
+                    FinishResult(page, refreshing, contextSentence, source, sourceTitle, pronounce: false);
+                    _setStatus($"刷新失败，已保留原结果。{ex.Message}");
+                }
+                else
+                {
+                    page.ShowError(ex.Message);
+                    page.ShowActions(StudioUi.CreateSecondaryButton("refresh", "重新查询",
+                        () => _ = RunLookupAsync(query, contextSentence, source, sourceTitle, language, linked: linked)));
+                    _setStatus("翻译未完成");
+                }
+            }
+        }
+        finally
+        {
+            if (_lookup == request)
+            {
+                _lookup = null;
+                _composer.SetGenerating(false);
+            }
         }
     }
 
     public void DisplayResult(DictionaryEntryResult result, TranslationTriggerSource source, string sourceTitle)
     {
-        _inputBox.Text = result.SourceText;
-        _bentoStage.Children.Clear();
-
-        var existing = _vocabularyService.FindByHeadword(result.SourceText);
-
-        // 1. HERO SPOTLIGHT BANNER
-        var saveBtn = StudioUi.CreatePrimaryButton(
-            existing is not null ? "check-all" : "notebook-plus",
-            existing is not null ? $"已入生词本 (累计查词 {existing.LookupCount} 次 · 点击更新卡片)" : "一键收录至超级单词本",
-            () =>
-            {
-                var nbId = (_targetNotebookCombo.SelectedItem as VocabularyNotebook)?.Id ?? "default";
-                var saved = _vocabularyService.AddOrUpdateFromDictionary(
-                    result,
-                    notebookId: nbId,
-                    contextSentence: _contextBox.Text,
-                    source: source,
-                    sourceTitle: sourceTitle);
-                DisplayResult(result, source, sourceTitle);
-                _setStatus($"已将「{saved.Headword}」收录进单词本，并激活 FSRS 记忆追踪！");
-            });
-        if (existing is not null)
-            saveBtn.Background = AppTheme.Emerald;
-
-        var copyBtn = StudioUi.CreateSecondaryButton("content-copy", "复制精翻结果", async () =>
-        {
-            var topLevel = TopLevel.GetTopLevel(this);
-            if (topLevel?.Clipboard is not null)
-            {
-                await topLevel.Clipboard.SetTextAsync($"{result.SourceText}\n{result.PrimaryTranslation}");
-                _setStatus("已复制词条与核心译文到剪贴板");
-            }
-        });
-
-        var badgesRow = new WrapPanel { Margin = new Thickness(0, 2, 0, 2) };
-        badgesRow.Children.Add(new Border
-        {
-            Margin = new Thickness(0, 0, 8, 4),
-            Child = StudioUi.CreateBadge(UiLabels.ItemType(result.ItemType), AppTheme.AccentSoft, AppTheme.AccentBright)
-        });
-        // Fixed-format datum: the detected source language -> the target language that was actually
-        // translated to. These two fields come straight from the structured AI response and were
-        // previously computed but never shown to the user.
-        badgesRow.Children.Add(new Border
-        {
-            Margin = new Thickness(0, 0, 10, 4),
-            Child = StudioUi.CreateBadge(
-                $"{UiLabels.Language(result.DetectedSourceLanguage)} → {UiLabels.Language(result.TargetLanguage)}",
-                AppTheme.CardElevatedBg,
-                AppTheme.TextSecondary)
-        });
-        foreach (var tag in result.SuggestedTags)
-        {
-            badgesRow.Children.Add(new Border
-            {
-                Margin = new Thickness(0, 0, 8, 4),
-                Child = StudioUi.CreateBadge($"#{tag}", AppTheme.CardElevatedBg, AppTheme.TextSecondary)
-            });
-        }
-
-        // Interactive KokoroSharp Phonics & Multi-Accent Speech Strip
-        var phonicsStrip = PhonicsAudioBar.CreateWordPhonicsStrip(
-            _speechService,
-            _settingsStore,
-            result.SourceText,
-            result.UsPhonetic,
-            result.UkPhonetic,
-            result.Examples.FirstOrDefault()?.SourceSentence);
-
-        if (_settingsStore.Current.AutoPronounceOnLookup)
-        {
-            _ = _speechService.SpeakAsync(
-                result.SourceText,
-                SpeechAccent.AmericanEnglish,
-                result.UsPhonetic,
-                _settingsStore.Current.SpeechSpeed,
-                _settingsStore.Current.PreferredUsVoiceId);
-        }
-
-        var heroGrid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            ColumnSpacing = 16,
-            Children =
-            {
-                new StackPanel
-                {
-                    Spacing = 10,
-                    Children =
-                    {
-                        new TextBlock
-                        {
-                            Text = result.SourceText,
-                            FontSize = 30,
-                            FontWeight = FontWeight.Bold,
-                            Foreground = AppTheme.TextPrimary,
-                            TextWrapping = TextWrapping.Wrap
-                        },
-                        phonicsStrip,
-                        badgesRow,
-                        new TextBlock
-                        {
-                            Text = result.PrimaryTranslation,
-                            FontSize = 18.5,
-                            FontWeight = FontWeight.SemiBold,
-                            Foreground = AppTheme.Emerald,
-                            TextWrapping = TextWrapping.Wrap
-                        }
-                    }
-                },
-                new StackPanel
-                {
-                    [Grid.ColumnProperty] = 1,
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 10,
-                    VerticalAlignment = VerticalAlignment.Top,
-                    Children = { copyBtn, saveBtn }
-                }
-            }
-        };
-        _bentoStage.Children.Add(StudioUi.CreateHeroCard(heroGrid));
-
-        // Visual seam marking the transition from fixed structured data (above) to AI-generated
-        // deep analysis (below) — makes the "fixed format + AI dynamic content" split legible at a glance.
-        _bentoStage.Children.Add(new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*"),
-            ColumnSpacing = 10,
-            Margin = new Thickness(2, 4, 2, -4),
-            Children =
-            {
-                StudioUi.CreateBadge("AI 深度解析", AppTheme.PurpleSoft, AppTheme.Purple),
-                new TextBlock
-                {
-                    [Grid.ColumnProperty] = 1,
-                    Text = "以下内容由 AI 实时生成，结合语境动态呈现",
-                    FontSize = 12,
-                    Foreground = AppTheme.TextMuted,
-                    VerticalAlignment = VerticalAlignment.Center
-                },
-                new Border
-                {
-                    [Grid.ColumnProperty] = 2,
-                    Height = 1,
-                    Background = AppTheme.BorderSubtle,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(4, 0, 0, 0)
-                }
-            }
-        });
-
-        // 2. ASYMMETRIC 2-COLUMN BENTO MATRIX (Left: Senses + Examples | Right: Etymology + Mnemonic + Collocations)
-        var leftColumn = new StackPanel { Spacing = 16 };
-        var rightColumn = new StackPanel { Spacing = 16 };
-
-        // Left Card A: Multi-POS Senses & Inflections
-        if (result.Senses.Count > 0 || result.Inflections.Count > 0)
-        {
-            var sensesStack = new StackPanel { Spacing = 10 };
-            sensesStack.Children.Add(StudioUi.CreateSectionHeader("book-open-variant", "多维词性释义与词形矩阵", "Senses & Morphology", AppTheme.AccentBright));
-            foreach (var sense in result.Senses)
-            {
-                sensesStack.Children.Add(new Border
-                {
-                    Background = AppTheme.InputBg,
-                    BorderBrush = AppTheme.BorderSubtle,
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(10),
-                    Padding = new Thickness(14, 10),
-                    Child = new StackPanel
-                    {
-                        Spacing = 4,
-                        Children =
-                        {
-                            new StackPanel
-                            {
-                                Orientation = Orientation.Horizontal,
-                                Spacing = 10,
-                                Children =
-                                {
-                                    StudioUi.CreateBadge(sense.PartOfSpeech, AppTheme.CardElevatedBg, AppTheme.AccentBright),
-                                    new TextBlock
-                                    {
-                                        Text = sense.DefinitionZh,
-                                        FontSize = 14.5,
-                                        FontWeight = FontWeight.SemiBold,
-                                        Foreground = AppTheme.TextPrimary,
-                                        VerticalAlignment = VerticalAlignment.Center,
-                                        TextWrapping = TextWrapping.Wrap
-                                    }
-                                }
-                            },
-                            new TextBlock
-                            {
-                                Text = sense.DefinitionEn,
-                                FontSize = 12.5,
-                                Foreground = AppTheme.TextSecondary,
-                                IsVisible = !string.IsNullOrWhiteSpace(sense.DefinitionEn),
-                                TextWrapping = TextWrapping.Wrap
-                            }
-                        }
-                    }
-                });
-            }
-
-            if (result.Inflections.Count > 0)
-            {
-                var infWrap = new WrapPanel { Margin = new Thickness(0, 4, 0, 0) };
-                foreach (var inf in result.Inflections)
-                {
-                    infWrap.Children.Add(new Border
-                    {
-                        Background = AppTheme.CardElevatedBg,
-                        CornerRadius = new CornerRadius(8),
-                        Padding = new Thickness(12, 5),
-                        Margin = new Thickness(0, 0, 8, 6),
-                        Child = new TextBlock
-                        {
-                            Text = $"{inf.Label}  →  {inf.Value}",
-                            FontSize = 12.5,
-                            FontFamily = AppTheme.MonoFont,
-                            Foreground = AppTheme.TextPrimary
-                        }
-                    });
-                }
-                sensesStack.Children.Add(infWrap);
-            }
-            leftColumn.Children.Add(StudioUi.CreateBentoCard(sensesStack));
-        }
-
-        // Left Card B: Authentic Bilingual Examples
-        if (result.Examples.Count > 0)
-        {
-            var exStack = new StackPanel { Spacing = 10 };
-            exStack.Children.Add(StudioUi.CreateSectionHeader("format-quote-close", "真实语料库双语例句", "Authentic Context Examples", AppTheme.TextSecondary));
-            foreach (var ex in result.Examples)
-            {
-                var exSentence = ex.SourceSentence;
-                exStack.Children.Add(new Border
-                {
-                    Background = AppTheme.InputBg,
-                    BorderBrush = AppTheme.BorderSubtle,
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(10),
-                    Padding = new Thickness(14, 11),
-                    Child = new Grid
-                    {
-                        ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-                        ColumnSpacing = 10,
-                        Children =
-                        {
-                            new StackPanel
-                            {
-                                Spacing = 5,
-                                Children =
-                                {
-                                    new TextBlock
-                                    {
-                                        Text = ex.SourceSentence,
-                                        FontSize = 14,
-                                        FontWeight = FontWeight.Medium,
-                                        Foreground = AppTheme.TextPrimary,
-                                        TextWrapping = TextWrapping.Wrap
-                                    },
-                                    new TextBlock
-                                    {
-                                        Text = ex.TranslatedSentence,
-                                        FontSize = 13,
-                                        Foreground = AppTheme.TextSecondary,
-                                        TextWrapping = TextWrapping.Wrap
-                                    }
-                                }
-                            },
-                            new Border
-                            {
-                                [Grid.ColumnProperty] = 1,
-                                VerticalAlignment = VerticalAlignment.Top,
-                                Child = PhonicsAudioBar.CreateSentenceReadButton(_speechService, _settingsStore, exSentence, "跟读")
-                            }
-                        }
-                    }
-                });
-            }
-            leftColumn.Children.Add(StudioUi.CreateBentoCard(exStack));
-        }
-
-        // Right Card A: AI Cognitive Memory & Etymology Lab
-        if (!string.IsNullOrWhiteSpace(result.EtymologyAndRoot) ||
-            !string.IsNullOrWhiteSpace(result.MemoryMnemonic) ||
-            !string.IsNullOrWhiteSpace(result.GrammarBreakdown) ||
-            !string.IsNullOrWhiteSpace(result.ContextMeaning))
-        {
-            var cogStack = new StackPanel { Spacing = 10 };
-            cogStack.Children.Add(StudioUi.CreateSectionHeader("lightbulb-on-outline", "AI 词源拆解与认知助记", "Etymology, Mnemonics & Syntax", AppTheme.Purple));
-
-            if (!string.IsNullOrWhiteSpace(result.ContextMeaning))
-                cogStack.Children.Add(StudioUi.CreateInfoTile("当前语境精准义", result.ContextMeaning, "sparkles", AppTheme.AccentBright));
-            if (!string.IsNullOrWhiteSpace(result.EtymologyAndRoot))
-                cogStack.Children.Add(StudioUi.CreateInfoTile("词源与词根词缀基因 (Etymology & Roots)", result.EtymologyAndRoot, "code-braces", AppTheme.Purple));
-            if (!string.IsNullOrWhiteSpace(result.MemoryMnemonic))
-                cogStack.Children.Add(StudioUi.CreateInfoTile("AI 高效联想巧记法 (Memory Mnemonic)", result.MemoryMnemonic, "lightbulb-on-outline", AppTheme.Amber));
-            if (!string.IsNullOrWhiteSpace(result.GrammarBreakdown))
-                cogStack.Children.Add(StudioUi.CreateInfoTile("句法与语法结构剖析", result.GrammarBreakdown, "school", AppTheme.Purple));
-            if (!string.IsNullOrWhiteSpace(result.UsageNotes))
-                cogStack.Children.Add(StudioUi.CreateInfoTile("母语者语域与辨析提示", result.UsageNotes));
-
-            rightColumn.Children.Add(StudioUi.CreateBentoCard(cogStack));
-        }
-
-        // Right Card B: Collocations & Semantic Network
-        if (result.Collocations.Count > 0 || result.Synonyms.Count > 0 || result.Antonyms.Count > 0)
-        {
-            var netStack = new StackPanel { Spacing = 10 };
-            netStack.Children.Add(StudioUi.CreateSectionHeader("sparkles", "高频搭配与近反义词网络", "Collocations & Semantic Graph", AppTheme.Purple));
-
-            if (result.Collocations.Count > 0)
-            {
-                var wrap = new WrapPanel();
-                foreach (var c in result.Collocations)
-                {
-                    wrap.Children.Add(new Border
-                    {
-                        Background = AppTheme.InputBg,
-                        BorderBrush = AppTheme.BorderSubtle,
-                        BorderThickness = new Thickness(1),
-                        CornerRadius = new CornerRadius(10),
-                        Padding = new Thickness(12, 8),
-                        Margin = new Thickness(0, 0, 8, 8),
-                        Child = new StackPanel
-                        {
-                            Spacing = 2,
-                            Children =
-                            {
-                                new TextBlock { Text = c.Phrase, FontWeight = FontWeight.Bold, Foreground = AppTheme.AccentBright, FontSize = 13.5 },
-                                new TextBlock { Text = c.Meaning, Foreground = AppTheme.TextSecondary, FontSize = 12 }
-                            }
-                        }
-                    });
-                }
-                netStack.Children.Add(wrap);
-            }
-
-            if (result.Synonyms.Count > 0)
-                netStack.Children.Add(StudioUi.CreateInfoTile("同义替换扩展 (Synonyms)", string.Join("   ·   ", result.Synonyms), "check", AppTheme.Emerald));
-            if (result.Antonyms.Count > 0)
-                netStack.Children.Add(StudioUi.CreateInfoTile("反义对比词汇 (Antonyms)", string.Join("   ·   ", result.Antonyms), "swap-horizontal", AppTheme.TextSecondary));
-
-            rightColumn.Children.Add(StudioUi.CreateBentoCard(netStack));
-        }
-
-        var bentoColumns = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("1.1*,0.9*"),
-            ColumnSpacing = 16,
-            Children = { leftColumn, rightColumn }
-        };
-        Grid.SetColumn(rightColumn, 1);
-        _bentoStage.Children.Add(bentoColumns);
+        StopLookup();
+        _history.Clear();
+        FinishResult(BeginResult(result.SourceText, result.TargetLanguage), result, null, source, sourceTitle);
     }
 
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
+    internal void StopLookup()
+    {
+        if (_lookup is not { } request) return;
+        _lookup = null;
+        (_scroll.Content as DictionaryResultView)?.MarkStopped();
+        _composer.SetGenerating(false);
+        _setStatus("已停止生成");
+        request.Cancel();
+    }
+
+    private DictionaryResultView BeginResult(string query, string language, string? context = null,
+        DictionaryDisclosures? disclosures = null)
+    {
+        _welcome.IsVisible = false;
+        _current = null;
+        _collection = null;
+        var page = new DictionaryResultView(query, language, _speech, _settings, LookupRelated, _history.Count > 0 ? GoBack : null, context, disclosures)
+        {
+            MaxWidth = ReadingWidth
+        };
+        _scroll.Content = page;
+        _scroll.ScrollToHome();
+        return page;
+    }
+
+    private void LookupRelated(string text, string sentence, bool fromTranslation)
+    {
+        if (_current is not { } parent || string.IsNullOrWhiteSpace(text)) return;
+        var mode = _composer.LanguageId ?? DictionaryTranslationDirection.AutoId;
+        if (fromTranslation) mode = DictionaryTranslationDirection.FromSourceCode(parent.Entry.DetectedSourceLanguage)?.Id ?? DictionaryTranslationDirection.AutoId;
+        else if (mode != DictionaryTranslationDirection.AutoId) mode = parent.Entry.TargetLanguage;
+        var target = DictionaryTranslationDirection.ResolveTargetId(text, mode);
+        if (_history.Count == 16) _history.RemoveAt(0);
+        _history.Add((parent, _scroll.Offset));
+        _ = RunLookupAsync(text, sentence, parent.Source, parent.Title, target, linked: true);
+    }
+
+    private void GoBack()
+    {
+        if (_history.Count == 0) return;
+        StopLookup();
+        var (previous, offset) = _history[^1];
+        _history.RemoveAt(_history.Count - 1);
+        var page = BeginResult(previous.Entry.SourceText, previous.Entry.TargetLanguage, previous.Context, previous.Disclosures);
+        FinishResult(page, previous.Entry, previous.Context, previous.Source, previous.Title, pronounce: false);
+        _scroll.UpdateLayout();
+        _scroll.Offset = offset;
+        _setStatus("已返回上一级查询");
+    }
+
+    private void FinishResult(DictionaryResultView page, DictionaryEntryResult result, string? contextSentence,
+        TranslationTriggerSource source, string sourceTitle, bool pronounce = true)
+    {
+        _current = new(result, contextSentence, source, sourceTitle, page.Disclosures);
+        page.ShowEntry(result, complete: true);
+        _collection = new NotebookCollection(
+            id => _vocabularyService.IsCollected(result, id),
+            id => _notebookId = id,
+            (book, collect) =>
+            {
+                try
+                {
+                    if (collect)
+                        _vocabularyService.AddOrUpdateFromDictionary(result, book.Id, contextSentence, source, sourceTitle);
+                    else
+                        _vocabularyService.RemoveFromNotebook(result, book.Id);
+                    _setStatus(collect ? $"已收录到「{book.Name}」" : $"已从「{book.Name}」取消收录");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _setStatus($"未能保存词本更改：{ex.Message}");
+                }
+            });
+        RefreshNotebooks();
+        var tools = new WrapPanel
+        {
+            ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S, Children = { _collection }
+        };
+        tools.Children.Add(DictionaryDetails.CreateCopyButton(async () =>
+        {
+            if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard)
+            {
+                await clipboard.SetTextAsync(result.PrimaryTranslation);
+                _setStatus("已复制译文");
+            }
+        }));
+        var accent = PhonicsAudioBar.SourceAccent(result.DetectedSourceLanguage);
+        if (accent is { } voice && (result.ItemType.IsPassage() || voice != SpeechAccent.AmericanEnglish))
+            tools.Children.Add(SpeechPlaybackButton.Create(click => StudioUi.CreateIconButton("volume-high", "朗读原文", click),
+                playback => PhonicsAudioBar.SpeakSentence(_speech, _settings, result.SourceText, voice, playback), page.SourcePlayback));
+        tools.Children.Add(StudioUi.CreateIconButton("refresh", "重新用 AI 翻译（忽略缓存）",
+            () => _ = RunLookupAsync(result.SourceText, contextSentence, source, sourceTitle, result.TargetLanguage, result)));
+        var extras = new WrapPanel { ItemSpacing = AppTheme.Space.XXS, LineSpacing = AppTheme.Space.XXS, HorizontalAlignment = HorizontalAlignment.Right };
+        if (!result.ItemType.IsPassage())
+        {
+            var reading = _current;
+            var check = StudioUi.CreateCompactButton("sparkles", result.ItemType.IsWordOrTerm() ? "补查词形与用法" : "补查常用义与短语",
+                () => _ = SupplementAsync(page, reading, examplesOnly: false));
+            ToolTip.SetTip(check, "补查词形在什么情境下使用，以及相关词、常用义和固定表达");
+            extras.Children.Add(check);
+            var missing = result.MissingUsageExamples().Count();
+            if (missing > 0)
+            {
+                var fill = StudioUi.CreateCompactButton("format-quote-close", $"补全例句 · {missing}",
+                    () => _ = SupplementAsync(page, reading, examplesOnly: true));
+                ToolTip.SetTip(fill, "只为缺双语例句的句型和搭配补例句，每次最多八处");
+                extras.Children.Add(fill);
+            }
+        }
+        page.ShowActions(tools, extras);
+        _setStatus("翻译完成");
+        if (pronounce && _settings.Current.AutoPronounceOnLookup && accent is { } autoVoice)
+            _ = _speech.SpeakAsync(result.SourceText, autoVoice, result.UsPhonetic, _settings.Current.SpeechSpeed,
+                autoVoice == SpeechAccent.AmericanEnglish ? _settings.Current.PreferredUsVoiceId : null, playback: page.SourcePlayback);
+    }
+
+    private async Task SupplementAsync(DictionaryResultView page, Reading reading, bool examplesOnly)
+    {
+        if (_lookup is not null || !ReferenceEquals(_current, reading)) return;
+        using var request = new CancellationTokenSource();
+        _lookup = request;
+        _composer.SetGenerating(true);
+        var progress = examplesOnly ? "正在补全双语例句…" : "正在补查词条用法…";
+        _setStatus(progress);
+        try
+        {
+            var result = examplesOnly
+                ? await _dictionaryService.CompleteExamplesAsync(reading.Entry, reading.Context, request.Token)
+                : await _dictionaryService.CheckLexicalCoverageAsync(reading.Entry, reading.Context, request.Token);
+            if (_lookup != request) return;
+            if (ReferenceEquals(result, reading.Entry))
+            {
+                _setStatus("本轮补查未发现可新增的内容");
+                return;
+            }
+            var offset = _scroll.Offset;
+            var updatedPage = BeginResult(result.SourceText, result.TargetLanguage, reading.Context, reading.Disclosures);
+            FinishResult(updatedPage, result, reading.Context, reading.Source, reading.Title, pronounce: false);
+            _scroll.UpdateLayout();
+            _scroll.Offset = offset;
+            _setStatus(examplesOnly
+                ? $"已补全 {reading.Entry.MissingUsageExamples().Count() - result.MissingUsageExamples().Count()} 处双语例句"
+                : "词条用法已补充");
+        }
+        catch (OperationCanceledException) when (request.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            if (_lookup == request)
+            {
+                page.ShowError($"补充失败：{ex.Message}");
+                _setStatus("已保留原词条，可重试");
+            }
+        }
+        finally
+        {
+            if (_lookup == request)
+            {
+                _lookup = null;
+                _composer.SetGenerating(false);
+            }
+        }
+    }
 }

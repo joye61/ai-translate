@@ -6,7 +6,8 @@ public enum VocabularyItemType
     Phrase = 1,
     Sentence = 2,
     Idiom = 3,
-    TechnicalTerm = 4
+    TechnicalTerm = 4,
+    Paragraph = 5
 }
 
 public enum MemoryStage
@@ -35,20 +36,65 @@ public enum ReviewQuizMode
 public sealed record PartOfSpeechSense(
     string PartOfSpeech,
     string DefinitionZh,
-    string DefinitionEn = "");
+    string DefinitionEn = "",
+    string Scenario = "",
+    string GrammarPattern = "",
+    string Register = "",
+    BilingualExample? Example = null,
+    string GrammarLabel = "")
+{
+    public IReadOnlyList<SenseUsageCase> UsageCases { get; init => field = value ?? []; } = [];
+
+    public bool Equals(PartOfSpeechSense? other) => other is not null && PartOfSpeech == other.PartOfSpeech &&
+        DefinitionZh == other.DefinitionZh && DefinitionEn == other.DefinitionEn && Scenario == other.Scenario &&
+        GrammarPattern == other.GrammarPattern && Register == other.Register && Example == other.Example &&
+        GrammarLabel == other.GrammarLabel && UsageCases.SequenceEqual(other.UsageCases);
+
+    public override int GetHashCode() => HashCode.Combine(PartOfSpeech, DefinitionZh, DefinitionEn, Scenario,
+        GrammarPattern, Register, Example, GrammarLabel);
+}
+
+public sealed record SenseUsageCase(string Condition, string Grammar, string Expression, string Meaning = "");
 
 public sealed record WordInflection(
     string Label,
-    string Value);
+    string Value,
+    string PartOfSpeech = "");
+
+// Label and Value retain the dictionary-cache / vocabulary JSON shape of older wordFamily rows.
+public sealed record RelatedForm(string Label, string Value, string PartOfSpeech = "", string Relation = "",
+    string Usage = "", string Expression = "")
+{
+    public bool IsSameFormOf(string headword) => Relation == "sameForm" &&
+        string.Equals(Value, headword.Trim(), StringComparison.OrdinalIgnoreCase);
+}
+
+public sealed record UsageContrast(string LeftForm, string LeftUse, string RightForm, string RightUse);
 
 public sealed record BilingualExample(
     string SourceSentence,
     string TranslatedSentence,
-    string HighlightTerm = "");
+    string HighlightTerm = "",
+    string SenseHint = "");
 
 public sealed record CollocationItem(
     string Phrase,
-    string Meaning);
+    string Meaning,
+    string SenseHint = "",
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    BilingualExample? Example = null);
+
+public enum DictionaryResultOrigin { Ai, Cache, BuiltIn, Supplemented }
+
+public sealed record GrammarHighlight(string Quote, string Label, string Explanation);
+
+public sealed record TranslationDecision(string SourceQuote, string TargetQuote, string Reason, string Alternative = "", string Condition = "")
+{
+    public bool IsAnchoredIn(string source, string target) =>
+        !string.IsNullOrWhiteSpace(SourceQuote) && !string.IsNullOrWhiteSpace(TargetQuote) && !string.IsNullOrWhiteSpace(Reason) &&
+        DictionaryTextMatch.IndexOf(source, SourceQuote, comparison: StringComparison.Ordinal) >= 0 &&
+        DictionaryTextMatch.IndexOf(target, TargetQuote, comparison: StringComparison.Ordinal) >= 0;
+}
 
 /// <summary>
 /// Rich AI dictionary & translation analysis result for both single words/phrases and long sentences/paragraphs.
@@ -57,23 +103,50 @@ public sealed record DictionaryEntryResult
 {
     public required string SourceText { get; init; }
     public required string PrimaryTranslation { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public DictionaryResultOrigin Origin { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public DictionaryCacheStamp? CacheStamp { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string LookupContext { get; init; } = "";
+    public IReadOnlyList<CollocationItem> GlossaryReferences { get; init; } = [];
+    public string Pronunciation { get; init; } = "";
+    public string CommonMistakes { get; init; } = "";
+    public string WordChoice { get; init; } = "";
+    public IReadOnlyList<UsageContrast> UsageContrasts { get; init; } = [];
     public string DetectedSourceLanguage { get; init; } = "auto";
     public string TargetLanguage { get; init; } = "zh-Hans";
     public VocabularyItemType ItemType { get; init; } = VocabularyItemType.Word;
-    public string?UkPhonetic { get; init; }
+    public string? UkPhonetic { get; init; }
     public string? UsPhonetic { get; init; }
     public string? ContextMeaning { get; init; }
     public string? EtymologyAndRoot { get; init; }
     public string? MemoryMnemonic { get; init; }
     public string? GrammarBreakdown { get; init; }
+    public IReadOnlyList<GrammarHighlight> GrammarHighlights { get; init; } = [];
+    public IReadOnlyList<TranslationDecision> TranslationDecisions { get; init; } = [];
     public string? UsageNotes { get; init; }
     public IReadOnlyList<PartOfSpeechSense> Senses { get; init; } = [];
     public IReadOnlyList<WordInflection> Inflections { get; init; } = [];
+    public IReadOnlyList<RelatedForm> WordFamily { get; init; } = [];
     public IReadOnlyList<CollocationItem> Collocations { get; init; } = [];
     public IReadOnlyList<string> Synonyms { get; init; } = [];
     public IReadOnlyList<string> Antonyms { get; init; } = [];
     public IReadOnlyList<BilingualExample> Examples { get; init; } = [];
     public IReadOnlyList<string> SuggestedTags { get; init; } = [];
+
+    // AI-judged extension blocks. Each is optional; the model fills one only when it adds real value.
+    public IReadOnlyList<TranslationVariant> Variants { get; init; } = [];
+    public IReadOnlyList<string> KeyPoints { get; init; } = [];
+    public IReadOnlyList<AlignedSentence> Alignment { get; init; } = [];
+    public IReadOnlyList<ClauseNode> Clauses { get; init; } = [];
+    public ToneProfile? Tone { get; init; }
+    public string LiteralMeaning { get; init; } = "";
+    public string CulturalNote { get; init; } = "";
+    public IReadOnlyList<string> Domains { get; init; } = [];
+    public IReadOnlyList<Morpheme> Morphemes { get; init; } = [];
+    public IReadOnlyList<SynonymNuance> SynonymNuances { get; init; } = [];
+    public IReadOnlyList<UsageMistake> Mistakes { get; init; } = [];
 }
 
 /// <summary>
@@ -99,6 +172,12 @@ public sealed record VocabularyEntry
     public required string Headword { get; init; }
     public required string Translation { get; init; }
     public string NotebookId { get; init; } = "default";
+    // The lookup context identifies a dictionary result. The displayed capture can also be a suggested example.
+    public string? DictionaryContext { get; init; }
+    public long DictionaryRevision { get; init; }
+
+    public string GetDictionaryContext() => DictionaryContext ??
+        (ContextSentence == Examples.FirstOrDefault()?.SourceSentence ? "" : ContextSentence.Trim().ReplaceLineEndings("\n"));
     public VocabularyItemType ItemType { get; init; } = VocabularyItemType.Word;
     public string SourceLanguage { get; init; } = "en";
     public string TargetLanguage { get; init; } = "zh-Hans";
@@ -108,6 +187,7 @@ public sealed record VocabularyEntry
     // Rich Linguistic & AI Memory Helpers
     public IReadOnlyList<PartOfSpeechSense> Senses { get; init; } = [];
     public IReadOnlyList<WordInflection> Inflections { get; init; } = [];
+    public IReadOnlyList<RelatedForm> WordFamily { get; init; } = [];
     public IReadOnlyList<CollocationItem> Collocations { get; init; } = [];
     public IReadOnlyList<BilingualExample> Examples { get; init; } = [];
     public IReadOnlyList<string> Synonyms { get; init; } = [];
@@ -115,6 +195,23 @@ public sealed record VocabularyEntry
     public string EtymologyAndRoot { get; init; } = "";
     public string MemoryMnemonic { get; init; } = "";
     public string GrammarOrUsageNote { get; init; } = "";
+    public IReadOnlyList<GrammarHighlight> GrammarHighlights { get; init; } = [];
+    public IReadOnlyList<TranslationDecision> TranslationDecisions { get; init; } = [];
+    public string Pronunciation { get; init; } = "";
+    public string CommonMistakes { get; init; } = "";
+    public string WordChoice { get; init; } = "";
+    public IReadOnlyList<UsageContrast> UsageContrasts { get; init; } = [];
+    public IReadOnlyList<TranslationVariant> Variants { get; init; } = [];
+    public IReadOnlyList<string> KeyPoints { get; init; } = [];
+    public IReadOnlyList<AlignedSentence> Alignment { get; init; } = [];
+    public IReadOnlyList<ClauseNode> Clauses { get; init; } = [];
+    public ToneProfile? Tone { get; init; }
+    public string LiteralMeaning { get; init; } = "";
+    public string CulturalNote { get; init; } = "";
+    public IReadOnlyList<string> Domains { get; init; } = [];
+    public IReadOnlyList<Morpheme> Morphemes { get; init; } = [];
+    public IReadOnlyList<SynonymNuance> SynonymNuances { get; init; } = [];
+    public IReadOnlyList<UsageMistake> Mistakes { get; init; } = [];
     public string UserPersonalNote { get; init; } = "";
 
     // Context Preservation (Where the user encountered it)

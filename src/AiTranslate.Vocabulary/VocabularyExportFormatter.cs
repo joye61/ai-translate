@@ -55,7 +55,7 @@ internal static class VocabularyExportFormatter
             sb.Append(Clean(item.Headword)).Append('\t')
               .Append(Clean(item.Translation)).Append('\t')
               .Append(Clean(item.UsPhonetic)).Append('\t')
-              .Append(Clean(item.MemoryMnemonic)).Append('\t')
+              .Append(Clean(InlineMarkup.Strip(item.MemoryMnemonic))).Append('\t')
               .Append(Clean(example)).Append('\t')
               .AppendLine(Clean(string.Join(" ", item.Tags)));
         }
@@ -76,8 +76,8 @@ internal static class VocabularyExportFormatter
                 CsvEscape(item.ItemType.ToString()),
                 CsvEscape(item.Stage.ToString()),
                 item.MasteryLevel,
-                CsvEscape(item.EtymologyAndRoot),
-                CsvEscape(item.MemoryMnemonic),
+                CsvEscape(InlineMarkup.Strip(item.EtymologyAndRoot)),
+                CsvEscape(InlineMarkup.Strip(item.MemoryMnemonic)),
                 CsvEscape(item.ContextSentence),
                 CsvEscape(item.UserPersonalNote),
                 CsvEscape(string.Join(";", item.Tags))));

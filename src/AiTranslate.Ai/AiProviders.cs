@@ -76,19 +76,28 @@ public class AiException(string message) : Exception(message);
 
 internal static class AiHttp
 {
-    public static HttpClient CreateClient() => new(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
+    private static readonly SocketsHttpHandler Connections = new()
+    {
+        AllowAutoRedirect = false,
+        UseCookies = false,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+    };
+
+    public static HttpClient CreateClient() => new(Connections, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
 
     public static void EnsureSuccess(HttpResponseMessage response)
     {
         if (response.IsSuccessStatusCode) return;
         throw new AiException((int)response.StatusCode switch
         {
+            400 or 422 => $"端点拒绝了请求（HTTP {(int)response.StatusCode}）。请核对模型 ID，并确认该端点和模型支持非思考模式。",
             401 => "API Key 无效或已失效，请在设置中配置有效的 API Key。",
             402 => "AI 供应商账户余额不足，请充值后重试。",
             403 => "供应商拒绝访问，请检查账户权限与服务区域。",
             404 => "所选模型或 API 端点不可用，请在设置中检查模型名称。",
             429 => "请求过于频繁或额度不足，请稍后重试。",
-            >= 500 => "AI 供应商服务暂时不可用，请稍后重试。",
+            503 => "当前翻译服务繁忙或维护中（HTTP 503）。请稍后重试，或在「引擎与快捷键」中切换服务商。",
+            >= 500 => $"AI 供应商服务暂时不可用（HTTP {(int)response.StatusCode}），请稍后重试。",
             _ => $"AI 请求失败（HTTP {(int)response.StatusCode}）。"
         });
     }

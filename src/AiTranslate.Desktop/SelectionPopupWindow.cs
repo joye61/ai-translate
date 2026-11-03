@@ -26,15 +26,9 @@ public sealed class SelectionPopupWindow : Window
     private readonly Action<DictionaryEntryResult, CapturedTextEvent> _onExpandToMain;
 
     private readonly TextBlock _headwordText;
-    private readonly Border _phonicsHost;
+    private readonly ScrollViewer _bodyHost;
     private readonly TextBlock _sourceTagText;
-    private readonly TextBlock _primaryTranslationText;
-    private readonly StackPanel _sensesPanel;
-    private readonly TextBlock _mnemonicText;
-    private readonly Border _mnemonicCard;
-    private readonly Button _addNotebookBtn;
-    private readonly MdiIcon _addNotebookIcon;
-    private readonly TextBlock _addNotebookLabel;
+    private readonly NotebookBookmarkButton _addNotebookBtn;
 
     private CancellationTokenSource? _cts;
     private DictionaryEntryResult? _currentResult;
@@ -62,39 +56,27 @@ public sealed class SelectionPopupWindow : Window
         ShowInTaskbar = false;
         Background = Brushes.Transparent;
 
-        _sourceTagText = new TextBlock
+        _sourceTagText = TextStyles.Apply(new TextBlock
         {
             Text = "划词速译",
-            FontFamily = AppTheme.BodyFont,
-            FontSize = 11.5,
-            FontWeight = FontWeight.SemiBold,
-            Foreground = AppTheme.AccentBright,
             VerticalAlignment = VerticalAlignment.Center
-        };
+        }, TextRole.Label);
 
-        _addNotebookIcon = new MdiIcon("notebook-plus", 15, Brushes.White);
-        _addNotebookLabel = new TextBlock
+        _addNotebookBtn = new NotebookBookmarkButton(collect =>
         {
-            Text = "加入生词本",
-            FontFamily = AppTheme.BodyFont,
-            FontSize = 12,
-            Foreground = Brushes.White,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        _addNotebookBtn = new Button
-        {
-            Background = AppTheme.Accent,
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(10, 4),
-            BorderThickness = new Thickness(0),
-            Content = new StackPanel
+            if (_currentResult is null) return;
+            try
             {
-                Orientation = Orientation.Horizontal,
-                Spacing = 5,
-                Children = { _addNotebookIcon, _addNotebookLabel }
+                if (collect) AddCurrentToVocabulary();
+                else _vocabularyService.RemoveFromNotebook(_currentResult, _settings.Current.DefaultNotebookId);
             }
-        };
-        _addNotebookBtn.Click += (_, _) => AddCurrentToVocabulary();
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _sourceTagText.Text = "词本保存失败";
+                ToolTip.SetTip(_sourceTagText, ex.Message);
+            }
+            RefreshBookmark();
+        });
 
         var expandBtn = CreateIconButton("book-open-variant", "在主界面深度打开", () =>
         {
@@ -114,10 +96,15 @@ public sealed class SelectionPopupWindow : Window
         });
 
         var closeBtn = CreateIconButton("close", "关闭弹窗 (Esc)", Hide);
+        var refreshBtn = CreateIconButton("refresh", "重新用 AI 翻译", () =>
+        {
+            if (_currentCapture is { } capture && _currentResult is { } result)
+                _ = ShowAndTranslateAsync(capture, forceRefresh: true, result.TargetLanguage);
+        });
 
         var headerBar = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto,Auto,Auto"),
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto,Auto"),
             ColumnSpacing = 6,
             Children =
             {
@@ -135,77 +122,26 @@ public sealed class SelectionPopupWindow : Window
             }
         };
         Grid.SetColumn(_addNotebookBtn, 2);
+        Grid.SetColumn(refreshBtn, 1);
         Grid.SetColumn(copyBtn, 3);
         Grid.SetColumn(expandBtn, 4);
         Grid.SetColumn(closeBtn, 5);
         headerBar.Children.Add(_addNotebookBtn);
+        headerBar.Children.Add(refreshBtn);
         headerBar.Children.Add(copyBtn);
         headerBar.Children.Add(expandBtn);
         headerBar.Children.Add(closeBtn);
 
-        _headwordText = new TextBlock
+        _headwordText = TextStyles.Apply(new TextBlock
         {
-            FontFamily = AppTheme.BodyFont,
-            FontSize = 18,
-            FontWeight = FontWeight.Bold,
-            Foreground = AppTheme.TextPrimary,
             TextWrapping = TextWrapping.Wrap,
             MaxLines = 3
-        };
+        }, TextRole.PageTitle);
 
-        _phonicsHost = new Border { IsVisible = false };
-
-        _primaryTranslationText = new TextBlock
+        _bodyHost = new ScrollViewer
         {
-            FontFamily = AppTheme.BodyFont,
-            FontSize = 14.5,
-            FontWeight = FontWeight.SemiBold,
-            Foreground = AppTheme.Emerald,
-            TextWrapping = TextWrapping.Wrap
-        };
-
-        _sensesPanel = new StackPanel { Spacing = 4 };
-
-        _mnemonicText = new TextBlock
-        {
-            FontFamily = AppTheme.BodyFont,
-            FontSize = 12,
-            Foreground = AppTheme.TextSecondary,
-            TextWrapping = TextWrapping.Wrap
-        };
-        _mnemonicCard = new Border
-        {
-            Background = AppTheme.InputBg,
-            BorderBrush = AppTheme.BorderSubtle,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(10, 8),
-            IsVisible = false,
-            Child = new StackPanel
-            {
-                Spacing = 3,
-                Children =
-                {
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 5,
-                        Children =
-                        {
-                            new MdiIcon("lightbulb-on-outline", 14, AppTheme.Amber),
-                            new TextBlock
-                            {
-                                Text = "AI 巧记与词源拆解",
-                                FontFamily = AppTheme.BodyFont,
-                                FontSize = 11.5,
-                                FontWeight = FontWeight.SemiBold,
-                                Foreground = AppTheme.Amber
-                            }
-                        }
-                    },
-                    _mnemonicText
-                }
-            }
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
         };
 
         var rootCard = new Border
@@ -215,21 +151,21 @@ public sealed class SelectionPopupWindow : Window
             BorderThickness = new Thickness(1.5),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(16, 14),
-            Child = new StackPanel
+            Child = new Grid
             {
-                Spacing = 10,
+                RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*"),
+                RowSpacing = 10,
                 Children =
                 {
                     headerBar,
-                    new Border { Height = 1, Background = AppTheme.BorderSubtle },
+                    new Border { [Grid.RowProperty] = 1, Height = 1, Background = AppTheme.BorderSubtle },
                     _headwordText,
-                    _phonicsHost,
-                    _primaryTranslationText,
-                    _sensesPanel,
-                    _mnemonicCard
+                    _bodyHost
                 }
             }
         };
+        Grid.SetRow(_headwordText, 2);
+        Grid.SetRow(_bodyHost, 3);
 
         // Allow dragging popup by header
         headerBar.PointerPressed += (_, e) =>
@@ -248,104 +184,93 @@ public sealed class SelectionPopupWindow : Window
         Content = rootCard;
     }
 
-    public async Task ShowAndTranslateAsync(CapturedTextEvent captured)
+    public async Task ShowAndTranslateAsync(CapturedTextEvent captured, bool forceRefresh = false, string? targetLanguage = null)
     {
-        _currentCapture = captured;
-        _cts?.Cancel();
-        _cts?.Dispose();
-        _cts = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-        var token = _cts.Token;
-
-        await Dispatcher.UIThread.InvokeAsync(() =>
+        if (!Dispatcher.UIThread.CheckAccess())
         {
-            _sourceTagText.Text = captured.Source switch
-            {
-                TranslationTriggerSource.ClipboardMonitor => "剪贴板监听快译",
-                TranslationTriggerSource.SelectionPopup => "划词即时翻译",
-                _ => "AI 速查"
-            };
-            _headwordText.Text = captured.Text;
-            _phonicsHost.IsVisible = false;
-            _primaryTranslationText.Text = "正在通过 AI 引擎解析词义与语境…";
-            _sensesPanel.Children.Clear();
-            _mnemonicCard.IsVisible = false;
+            await Dispatcher.UIThread.InvokeAsync(() => ShowAndTranslateAsync(captured, forceRefresh, targetLanguage));
+            return;
+        }
 
-            var existing = _vocabularyService.FindByHeadword(captured.Text);
-            UpdateNotebookButtonState(existing is not null);
+        _cts?.Cancel();
+        using var request = new CancellationTokenSource();
+        _cts = request;
+        var token = request.Token;
+        var previous = forceRefresh && _currentCapture == captured ? _currentResult : null;
+        _currentResult = null;
+        _currentCapture = captured;
 
-            PositionNearCursor(captured.ScreenPoint);
-            if (!IsVisible) Show();
-            Activate();
-        });
+        _sourceTagText.Text = captured.Source switch
+        {
+            TranslationTriggerSource.ClipboardMonitor => "剪贴板监听快译",
+            TranslationTriggerSource.SelectionPopup => "划词即时翻译",
+            _ => "AI 速查"
+        };
+        ToolTip.SetTip(_sourceTagText, null);
+        _headwordText.Text = captured.Text;
+        var body = new SelectionPopupBody(_speechService, _settings);
+        _bodyHost.Content = body;
+        _bodyHost.ScrollToHome();
+
+        RefreshBookmark();
+
+        PositionNearCursor(captured.ScreenPoint);
+        if (!IsVisible) Show();
+        Activate();
 
         try
         {
             var result = await _dictionaryService.LookupOrTranslateAsync(
                 captured.Text,
-                _settings.Current.DefaultTargetLanguage,
+                targetLanguage ?? DictionaryTranslationDirection.ResolveTargetId(captured.Text, DictionaryTranslationDirection.GetMode(_settings.Current)),
                 contextSentence: null,
-                cancellationToken: token);
+                cancellationToken: token,
+                onEntryPreview: partial => Dispatcher.UIThread.Post(() =>
+                {
+                    if (_cts == request) body.ShowEntry(partial, complete: false);
+                }),
+                forceRefresh: forceRefresh);
 
             if (token.IsCancellationRequested) return;
 
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            ShowResult(result, body);
+            if (!forceRefresh && _settings.Current.AutoAddLookedUpWordsToNotebook && result.ItemType == VocabularyItemType.Word &&
+                !_vocabularyService.IsCollected(result, _settings.Current.DefaultNotebookId))
             {
-                _currentResult = result;
-                _primaryTranslationText.Text = result.PrimaryTranslation;
-
-                _phonicsHost.Child = PhonicsAudioBar.CreateWordPhonicsStrip(
-                    _speechService,
-                    _settings,
-                    result.SourceText,
-                    result.UsPhonetic,
-                    result.UkPhonetic,
-                    compact: true);
-                _phonicsHost.IsVisible = true;
-
-                _sensesPanel.Children.Clear();
-                foreach (var sense in result.Senses.Take(3))
-                {
-                    _sensesPanel.Children.Add(new TextBlock
-                    {
-                        Text = $"{sense.PartOfSpeech}  {sense.DefinitionZh}",
-                        FontFamily = AppTheme.BodyFont,
-                        FontSize = 13,
-                        Foreground = AppTheme.TextPrimary,
-                        TextWrapping = TextWrapping.Wrap
-                    });
-                }
-
-                var memoryHint = !string.IsNullOrWhiteSpace(result.MemoryMnemonic)
-                    ? result.MemoryMnemonic
-                    : result.EtymologyAndRoot;
-                if (!string.IsNullOrWhiteSpace(memoryHint))
-                {
-                    _mnemonicText.Text = memoryHint;
-                    _mnemonicCard.IsVisible = true;
-                }
-
-                if (_settings.Current.AutoAddLookedUpWordsToNotebook && result.ItemType == VocabularyItemType.Word)
-                {
-                    AddCurrentToVocabulary();
-                }
-            });
+                AddCurrentToVocabulary();
+            }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            if (token.IsCancellationRequested) return;
+            if (previous is null) body.ShowError($"翻译出错：{ex.Message}");
+            else
             {
-                _primaryTranslationText.Text = $"翻译出错：{ex.Message}";
-            });
+                ShowResult(previous, body);
+                _sourceTagText.Text = "刷新失败";
+                ToolTip.SetTip(_sourceTagText, ex.Message);
+            }
         }
+        finally
+        {
+            if (_cts == request) _cts = null;
+        }
+    }
+
+    private void ShowResult(DictionaryEntryResult result, SelectionPopupBody body)
+    {
+        _currentResult = result;
+        RefreshBookmark();
+        if (result.Origin == DictionaryResultOrigin.Cache) _sourceTagText.Text = "本地缓存";
+        body.ShowEntry(result, complete: true);
     }
 
     protected override void OnClosed(EventArgs e)
     {
         _cts?.Cancel();
-        _cts?.Dispose();
         _cts = null;
         base.OnClosed(e);
     }
@@ -356,17 +281,16 @@ public sealed class SelectionPopupWindow : Window
         _vocabularyService.AddOrUpdateFromDictionary(
             _currentResult,
             notebookId: _settings.Current.DefaultNotebookId,
-            contextSentence: _currentResult.Examples.FirstOrDefault()?.SourceSentence,
             source: _currentCapture?.Source ?? TranslationTriggerSource.SelectionPopup,
             sourceTitle: _currentCapture?.SourceWindowTitle ?? "");
-        UpdateNotebookButtonState(true);
+        RefreshBookmark();
     }
 
-    private void UpdateNotebookButtonState(bool saved)
+    internal void RefreshBookmark()
     {
-        _addNotebookIcon.IconName = saved ? "check" : "notebook-plus";
-        _addNotebookLabel.Text = saved ? "已入生词本" : "加入生词本";
-        _addNotebookBtn.Background = saved ? AppTheme.Emerald : AppTheme.Accent;
+        _addNotebookBtn.IsEnabled = _currentResult is not null;
+        _addNotebookBtn.SetSaved(_currentResult is not null &&
+            _vocabularyService.IsCollected(_currentResult, _settings.Current.DefaultNotebookId));
     }
 
     private void PositionNearCursor(PointD cursor)
@@ -391,10 +315,11 @@ public sealed class SelectionPopupWindow : Window
     {
         var btn = new Button
         {
+            Classes = { "ghost" },
             Width = 28,
             Height = 28,
             Padding = new Thickness(0),
-            CornerRadius = new CornerRadius(6),
+            CornerRadius = new CornerRadius(AppTheme.Radius.S),
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             HorizontalContentAlignment = HorizontalAlignment.Center,

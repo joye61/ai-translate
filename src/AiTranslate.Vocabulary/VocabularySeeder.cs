@@ -53,7 +53,8 @@ internal static class VocabularySeeder
         };
 
         var entries = new List<VocabularyEntry>();
-        foreach (var item in BuiltInShowcaseLexicon.All)
+        // Extra lookup examples should be collected by the reader before they enter the review queue.
+        foreach (var item in BuiltInShowcaseLexicon.All.Where(e => e.SourceText is "serendipity" or "ephemeral" or "ubiquitous"))
         {
             var nbId = item.SourceText == "ephemeral" ? "tech-ai"
                 : item.SourceText == "ubiquitous" ? "academic-writing"
@@ -69,6 +70,8 @@ internal static class VocabularySeeder
                 UsPhonetic = item.UsPhonetic ?? "",
                 Senses = item.Senses,
                 Inflections = item.Inflections,
+                WordFamily = item.WordFamily,
+                UsageContrasts = item.UsageContrasts,
                 Collocations = item.Collocations,
                 Examples = item.Examples,
                 Synonyms = item.Synonyms,

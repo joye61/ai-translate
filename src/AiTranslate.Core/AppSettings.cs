@@ -13,6 +13,7 @@ public sealed record AppSettings
     public string ApiKey { get; init; } = "";
 
     public string DefaultTargetLanguage { get; init; } = "zh-Hans";
+    public string? DictionaryTargetMode { get; init; }
     public string SecondaryTargetLanguage { get; init; } = "en";
 
     public bool EnableClipboardMonitor { get; init; }

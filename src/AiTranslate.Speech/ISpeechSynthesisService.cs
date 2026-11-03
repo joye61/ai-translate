@@ -30,8 +30,24 @@ public sealed record KokoroSpeakerProfile(
     public override string ToString() => $"{DisplayName} ({Description})";
 }
 
+/// <summary>Identifies a reading action across manual playback, autoplay and view reattachment.</summary>
+public sealed class SpeechPlayback
+{
+    private volatile bool _isPlaying;
+    public bool IsPlaying => _isPlaying;
+    public event EventHandler? Changed;
+
+    internal void SetPlaying(bool playing)
+    {
+        if (_isPlaying == playing) return;
+        _isPlaying = playing;
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+}
+
 public interface ISpeechSynthesisService : IDisposable
 {
+    public const string DisplayName = "神经语音引擎";
     bool IsKokoroModelLoaded { get; }
     bool IsSpeaking { get; }
     string EngineStatus { get; }
@@ -39,7 +55,7 @@ public interface ISpeechSynthesisService : IDisposable
 
     IReadOnlyList<KokoroSpeakerProfile> GetAvailableVoices(SpeechAccent? accentFilter = null);
 
-    /// <summary>Initializes or downloads the Kokoro-82M ONNX model in the background for KokoroSharp.</summary>
+    /// <summary>Loads the bundled Kokoro-82M ONNX model from disk.</summary>
     Task<bool> EnsureKokoroModelReadyAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Speaks a word, phrase, or sentence using the specified accent, IPA phoneme literal, and speed.</summary>
@@ -49,7 +65,8 @@ public interface ISpeechSynthesisService : IDisposable
         string? ipaPhonetic = null,
         float speed = 1.0f,
         string? preferredVoiceId = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        SpeechPlayback? playback = null);
 
     /// <summary>
     /// Phonics Breakdown reading (自然拼读模式):
@@ -59,7 +76,8 @@ public interface ISpeechSynthesisService : IDisposable
         string headword,
         string? ipaPhonetic = null,
         SpeechAccent accent = SpeechAccent.AmericanEnglish,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        SpeechPlayback? playback = null);
 
     /// <summary>
     /// Immersive Vocabulary Memory Loop (单词磨耳朵循环读):
@@ -70,7 +88,8 @@ public interface ISpeechSynthesisService : IDisposable
         string? usIpa,
         string? ukIpa,
         string? exampleSentence,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        SpeechPlayback? playback = null);
 
     void Stop();
 }

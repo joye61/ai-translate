@@ -1,5 +1,6 @@
 using AiTranslate.Speech;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -16,6 +17,14 @@ namespace AiTranslate.Desktop.Controls;
 /// </summary>
 public static class PhonicsAudioBar
 {
+    internal static SpeechAccent? SourceAccent(string language) => language.Split('-')[0].ToLowerInvariant() switch
+    {
+        "en" => SpeechAccent.AmericanEnglish,
+        "zh" => SpeechAccent.MandarinChinese,
+        "ja" => SpeechAccent.Japanese,
+        _ => null
+    };
+
     public static Control CreateWordPhonicsStrip(
         ISpeechSynthesisService speech,
         AppSettingsStore settings,
@@ -23,49 +32,58 @@ public static class PhonicsAudioBar
         string? usIpa,
         string? ukIpa,
         string? exampleSentence = null,
-        bool compact = false)
+        bool compact = false,
+        SpeechPlayback? usPlayback = null)
     {
-        var wrap = new WrapPanel { VerticalAlignment = VerticalAlignment.Center };
+        var wrap = CreateAccentStrip(speech, settings, headword, usIpa, ukIpa, usPlayback);
+        AddPracticeButtons(wrap, speech, settings, headword, usIpa, ukIpa, exampleSentence, compact);
+        return wrap;
+    }
+
+    internal static WrapPanel CreateAccentStrip(ISpeechSynthesisService speech, AppSettingsStore settings,
+        string headword, string? usIpa, string? ukIpa, SpeechPlayback? usPlayback = null)
+    {
+        var wrap = new WrapPanel { VerticalAlignment = VerticalAlignment.Center, ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S };
 
         // 1. US Accent Button
         var usLabel = !string.IsNullOrWhiteSpace(usIpa) ? $"美 {usIpa}" : "美音 US";
         wrap.Children.Add(CreateSpeechPill(
             "volume-high",
             usLabel,
-            AppTheme.AccentSoft,
-            AppTheme.AccentBright,
-            () => _ = speech.SpeakAsync(
+            playback => speech.SpeakAsync(
                 headword,
                 SpeechAccent.AmericanEnglish,
                 usIpa,
                 settings.Current.SpeechSpeed,
-                settings.Current.PreferredUsVoiceId)));
+                settings.Current.PreferredUsVoiceId, playback: playback), usPlayback));
 
         // 2. UK Accent Button
         var ukLabel = !string.IsNullOrWhiteSpace(ukIpa) ? $"英 {ukIpa}" : "英音 UK";
         wrap.Children.Add(CreateSpeechPill(
             "volume-high",
             ukLabel,
-            AppTheme.PurpleSoft,
-            AppTheme.Purple,
-            () => _ = speech.SpeakAsync(
+            playback => speech.SpeakAsync(
                 headword,
                 SpeechAccent.BritishEnglish,
                 ukIpa,
                 settings.Current.SpeechSpeed,
-                settings.Current.PreferredUkVoiceId)));
+                settings.Current.PreferredUkVoiceId, playback: playback)));
 
-        // 3. Phonics Syllable Breakdown (自然拼读拆解领读)
-        var syllables = KokoroSpeechService.SplitIntoPhonicsSyllables(headword);
-        var syllableHint = syllables.Count > 1 && !compact
-            ? $"自然拼读 [{string.Join("·", syllables)}]"
-            : "自然拼读";
-        wrap.Children.Add(CreateSpeechPill(
-            "waveform",
-            syllableHint,
-            AppTheme.AmberSoft,
-            AppTheme.Amber,
-            () => _ = speech.SpeakPhonicsBreakdownAsync(headword, usIpa, SpeechAccent.AmericanEnglish)));
+        return wrap;
+    }
+
+    internal static void AddPracticeButtons(WrapPanel wrap, ISpeechSynthesisService speech, AppSettingsStore settings,
+        string headword, string? usIpa, string? ukIpa, string? exampleSentence, bool compact = false)
+    {
+        if (!headword.Any(char.IsWhiteSpace))
+        {
+            var syllables = KokoroSpeechService.SplitIntoPhonicsSyllables(headword);
+            var syllableHint = syllables.Count > 1 && !compact && headword.Length <= 18
+                ? $"自然拼读 [{string.Join("·", syllables)}]"
+                : "自然拼读";
+            wrap.Children.Add(CreateSpeechPill("waveform", syllableHint,
+                playback => speech.SpeakPhonicsBreakdownAsync(headword, usIpa, SpeechAccent.AmericanEnglish, playback: playback)));
+        }
 
         if (!compact)
         {
@@ -73,75 +91,70 @@ public static class PhonicsAudioBar
             wrap.Children.Add(CreateSpeechPill(
                 "speedometer-slow",
                 "0.7x 慢读跟读",
-                AppTheme.CardElevatedBg,
-                AppTheme.TextSecondary,
-                () => _ = speech.SpeakAsync(
+                playback => speech.SpeakAsync(
                     headword,
                     SpeechAccent.AmericanEnglish,
                     usIpa,
                     speed: 0.68f,
-                    settings.Current.PreferredUsVoiceId)));
+                    settings.Current.PreferredUsVoiceId, playback: playback)));
 
             // 5. Vocabulary Memory Loop (美音 -> 英音 -> 例句连读)
             wrap.Children.Add(CreateSpeechPill(
                 "repeat",
                 "磨耳朵连读",
-                AppTheme.EmeraldSoft,
-                AppTheme.Emerald,
-                () => _ = speech.SpeakVocabularyCardAsync(headword, usIpa, ukIpa, exampleSentence)));
+                playback => speech.SpeakVocabularyCardAsync(headword, usIpa, ukIpa, exampleSentence, playback: playback)));
         }
-
-        return wrap;
     }
 
     public static Button CreateSentenceReadButton(
         ISpeechSynthesisService speech,
         AppSettingsStore settings,
         string sentence,
-        string label = "朗读例句")
+        string label = "朗读例句",
+        SpeechAccent accent = SpeechAccent.AmericanEnglish)
     {
-        return CreateSpeechPill(
-            "account-voice",
-            label,
-            AppTheme.AccentSoft,
-            AppTheme.AccentBright,
-            () => _ = speech.SpeakAsync(
-                sentence,
-                SpeechAccent.AmericanEnglish,
-                ipaPhonetic: null,
-                speed: settings.Current.SpeechSpeed,
-                preferredVoiceId: settings.Current.PreferredUsVoiceId));
+        return CreateSpeechPill("volume-high", label, playback => SpeakSentence(speech, settings, sentence, accent, playback));
     }
 
-    private static Button CreateSpeechPill(string mdiIcon, string text, IBrush bg, IBrush fg, Action onClick)
+    internal static Task SpeakSentence(ISpeechSynthesisService speech, AppSettingsStore settings, string sentence, SpeechAccent accent, SpeechPlayback playback) =>
+        speech.SpeakAsync(
+            sentence,
+            accent,
+            ipaPhonetic: null,
+            speed: settings.Current.SpeechSpeed,
+            preferredVoiceId: accent == SpeechAccent.AmericanEnglish ? settings.Current.PreferredUsVoiceId : null,
+            playback: playback);
+
+    private static Button CreateSpeechPill(string mdiIcon, string text, Func<SpeechPlayback, Task> speak, SpeechPlayback? playback = null) =>
+        SpeechPlaybackButton.Create(click => BuildPill(mdiIcon, text, click), speak, playback);
+
+    private static Button BuildPill(string mdiIcon, string text, Action onClick)
     {
         var btn = new Button
         {
-            Background = bg,
-            BorderBrush = AppTheme.BorderSubtle,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(999),
-            Padding = new Thickness(11, 5),
-            Margin = new Thickness(0, 0, 8, 6),
+            Classes = { "ghost" },
+            Background = AppTheme.CardElevatedBg,
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(AppTheme.Radius.Pill),
+            Padding = new Thickness(10, 5, 12, 5),
+            VerticalAlignment = VerticalAlignment.Center,
             Content = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 Spacing = 6,
                 Children =
                 {
-                    new MdiIcon(mdiIcon, 14, fg),
-                    new TextBlock
+                    new MdiIcon(mdiIcon, 14, AppTheme.TextSecondary),
+                    TextStyles.Apply(new TextBlock
                     {
                         Text = text,
-                        FontFamily = AppTheme.MonoFont,
-                        FontSize = 12,
-                        FontWeight = FontWeight.SemiBold,
-                        Foreground = fg,
                         VerticalAlignment = VerticalAlignment.Center
-                    }
+                    }, TextRole.Phonetic)
                 }
             }
         };
+        AutomationProperties.SetName(btn, text);
+        ToolTip.SetTip(btn, $"播放 · {text}");
         btn.Click += (_, _) => onClick();
         return btn;
     }

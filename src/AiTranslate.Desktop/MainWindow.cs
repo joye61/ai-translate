@@ -44,6 +44,7 @@ public sealed class MainWindow : Window
     private readonly ToggleSwitch _clipboardMonitorToggle;
     private readonly ToggleSwitch _selectionMonitorToggle;
     private readonly TextBlock _statusFooterText;
+    private readonly ContentControl _pageTools = new();
 
     private bool _allowExit;
     private bool _syncingToggles;
@@ -60,19 +61,19 @@ public sealed class MainWindow : Window
         _vocabularyService = vocabularyService;
         _speechService = speechService;
 
-        Title = "AI Translate · 认知词典 · 划词 · XCapture 截图翻译 · 超级单词本";
-        Icon = SystemTrayService.CreateAppWindowIcon();
-        Width = 1320;
-        Height = 840;
-        MinWidth = 1020;
-        MinHeight = 680;
+        Title = "AI Translate · 翻译工作台";
+        Icon = AppIcons.CreateWindowIcon();
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        ShowActivated = true;
+        FitToWorkingArea(new Size(1040, 840));
         Background = AppTheme.WindowBg;
         FontFamily = AppTheme.BodyFont;
 
         _statusFooterText = new TextBlock
         {
-            Text = "常驻系统托盘运行中 · 快捷键：Alt+Q 划词速译 | Alt+S 截图原位翻译 | Alt+W 剪贴板翻译 | Alt+D 呼出工作台",
-            FontSize = 12,
+            Text = "就绪",
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            FontSize = AppTheme.Type.Caption,
             Foreground = AppTheme.TextSecondary,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -98,7 +99,7 @@ public sealed class MainWindow : Window
                         SourceText = source,
                         PrimaryTranslation = translated,
                         TargetLanguage = _settingsStore.Current.DefaultTargetLanguage,
-                        ItemType = source.Contains(' ') ? VocabularyItemType.Sentence : VocabularyItemType.Word,
+                        ItemType = DictionaryQuery.SuggestType(source),
                         Senses = [new("截图译文", translated)]
                     };
                     _vocabularyService.AddOrUpdateFromDictionary(
@@ -132,9 +133,7 @@ public sealed class MainWindow : Window
             _vocabularyService,
             _speechService,
             _settingsStore,
-            SetStatus,
-            () => _screenshotCoordinator.StartCaptureAndTranslateAsync(),
-            TranslateClipboardNowAsync);
+            SetStatus);
 
         _vocabularyView = new VocabularyVaultView(
             _vocabularyService,
@@ -145,7 +144,12 @@ public sealed class MainWindow : Window
                 SwitchTab(0);
                 _ = _dictionaryView.LookupAsync(word, ctx, src, title);
             },
-            onSwitchToReview: () => SwitchTab(2),
+            onCollect: notebookId =>
+            {
+                _dictionaryView.RefreshNotebooks(notebookId);
+                SwitchTab(0);
+            },
+            onSwitchToReview: notebookId => SwitchTab(2, notebookId),
             SetStatus);
 
         _reviewView = new FsrsReviewArenaView(_vocabularyService, _speechService, _settingsStore, SetStatus);
@@ -164,15 +168,16 @@ public sealed class MainWindow : Window
             onOpenSettings: () => Dispatcher.UIThread.Post(() => { ShowAndActivate(); SwitchTab(3); }),
             onExitApplication: ExitApplication);
 
-        _navDictBtn = CreateNavButton("translate", "AI 认知词典工作台", 0);
-        _navVocabBtn = CreateNavButton("book-open-page-variant", "超级生词本与记忆库", 1);
-        _navReviewBtn = CreateNavButton("brain", "FSRS 科学复习训练", 2);
-        _navSettingsBtn = CreateNavButton("cog-outline", "AI 引擎与热键配置", 3);
+        _navDictBtn = CreateNavButton("translate", "查词与翻译", 0);
+        _navVocabBtn = CreateNavButton("book-open-page-variant", "生词本", 1);
+        _navReviewBtn = CreateNavButton("brain", "复习训练", 2);
+        _navSettingsBtn = CreateNavButton("cog-outline", "引擎与快捷键", 3);
 
         _dueBadgeText = new TextBlock { Text = "0", FontSize = 11, FontWeight = FontWeight.Bold, Foreground = Brushes.White };
         _dueBadgeBorder = new Border
         {
-            Background = AppTheme.Amber,
+            Background = AppTheme.Accent,
+            IsHitTestVisible = false,
             CornerRadius = new CornerRadius(999),
             Padding = new Thickness(7, 2),
             HorizontalAlignment = HorizontalAlignment.Right,
@@ -211,14 +216,18 @@ public sealed class MainWindow : Window
             _settingsStore.Update(_settingsStore.Current with { EnableMouseSelectionTranslate = enabled });
         };
 
-        var sidebar = BuildSidebar();
+        var windowButtons = WindowTitleBar.CreateButtons(this);
+        var mac = OperatingSystem.IsMacOS();
+        var sidebar = BuildSidebar(mac ? windowButtons : null);
         var contentHost = new Grid
         {
-            RowDefinitions = new RowDefinitions("*,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,*,Auto"),
             Children =
             {
+                WindowTitleBar.CreateWorkspaceToolbar(this, _pageTools, mac ? null : windowButtons),
                 new Panel
                 {
+                    [Grid.RowProperty] = 1,
                     Children =
                     {
                         _dictionaryView,
@@ -229,21 +238,21 @@ public sealed class MainWindow : Window
                 },
                 new Border
                 {
-                    [Grid.RowProperty] = 1,
-                    Background = AppTheme.SidebarBg,
-                    BorderBrush = AppTheme.BorderSubtle,
-                    BorderThickness = new Thickness(0, 1, 0, 0),
-                    Padding = new Thickness(20, 8),
+                    [Grid.RowProperty] = 2,
+                    Padding = new Thickness(AppTheme.Space.XXL, AppTheme.Space.XS, AppTheme.Space.XXL, AppTheme.Space.M),
                     Child = new Grid
                     {
                         ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                        ColumnSpacing = AppTheme.Space.L,
                         Children =
                         {
                             _statusFooterText,
-                            new Border
+                            new TextBlock
                             {
                                 [Grid.ColumnProperty] = 1,
-                                Child = StudioUi.CreateBadge("托盘常驻已启用", AppTheme.EmeraldSoft, AppTheme.Emerald)
+                                Text = $"托盘常驻   ·   {_settingsStore.Current.ShowWindowHotkey} 呼出",
+                                FontSize = AppTheme.Type.Caption,
+                                Foreground = AppTheme.TextSecondary
                             }
                         }
                     }
@@ -253,11 +262,11 @@ public sealed class MainWindow : Window
 
         var rootGrid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("256,*"),
+            ColumnDefinitions = new ColumnDefinitions("232,*"),
             Children = { sidebar, contentHost }
         };
         Grid.SetColumn(contentHost, 1);
-        Content = rootGrid;
+        WindowTitleBar.SetContent(this, rootGrid);
 
         // Wire events
         _platform.IsClipboardMonitoringEnabled = _settingsStore.Current.EnableClipboardMonitor;
@@ -283,11 +292,32 @@ public sealed class MainWindow : Window
         RegisterGlobalHotkeys();
         OnVocabularyChanged();
         SwitchTab(0);
-        // Only auto-run the "serendipity" showcase lookup for genuinely new users (empty
-        // notebook). Previously this fired on every single startup, silently burning an AI API
-        // call (real money for paid keys) each time the app was reopened from the tray.
-        if (_vocabularyService.GetDashboardStats().TotalEntries == 0)
-            _ = _dictionaryView.LookupAsync("serendipity", null, TranslationTriggerSource.ManualInput, "精选词条");
+        Opened += (_, _) => _dictionaryView.FocusInput();
+    }
+
+    private void FitToWorkingArea(Size requested, bool recenter = false)
+    {
+        // Match CenterScreen's monitor selection, including a fallback after a display is disconnected.
+        var screen = Screens.ScreenFromPoint(Position) ?? Screens.Primary;
+        var available = Size.Infinity;
+        if (screen?.WorkingArea is { Width: > 0, Height: > 0 } workArea)
+        {
+            var workSize = workArea.Size.ToSize(screen.Scaling);
+            // Leave room for the resize frame and a visible desktop margin on small screens.
+            available = new Size(Math.Max(1, workSize.Width - 2 * AppTheme.Space.L),
+                Math.Max(1, workSize.Height - 2 * AppTheme.Space.L));
+        }
+        MinWidth = Math.Min(1020, available.Width);
+        MinHeight = Math.Min(680, available.Height);
+        Width = Math.Clamp(requested.Width, MinWidth, available.Width);
+        Height = Math.Clamp(requested.Height, MinHeight, available.Height);
+        if (recenter && screen?.WorkingArea is { Width: > 0, Height: > 0 } bounds)
+        {
+            // Avalonia applies WindowStartupLocation only on first show. Include the resize frame on later opens.
+            var frame = (FrameSize ?? ClientSize) - ClientSize;
+            var pixels = PixelSize.FromSize(new Size(Width, Height) + frame, screen.Scaling);
+            Position = bounds.CenterRect(new PixelRect(pixels)).Position;
+        }
     }
 
     protected override void OnClosing(WindowClosingEventArgs e)
@@ -304,6 +334,7 @@ public sealed class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _dictionaryView.StopLookup();
         _selectionPopup.Close();
         _screenshotCoordinator.Dispose();
         _trayService.Dispose();
@@ -316,34 +347,34 @@ public sealed class MainWindow : Window
         Close();
     }
 
-    private Border BuildSidebar()
+    private Border BuildSidebar(Control? leadingButtons)
     {
-        var brandBox = new StackPanel
+        var wordmark = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 12,
-            Margin = new Thickness(18, 20, 18, 16),
+            Spacing = AppTheme.Space.S,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(leadingButtons is null ? AppTheme.Space.XL : AppTheme.Space.S, 0, AppTheme.Space.M, 0),
             Children =
             {
-                new Border
+                AppIcons.CreateLogo(32),
+                new TextBlock
                 {
-                    Width = 38,
-                    Height = 38,
-                    CornerRadius = new CornerRadius(10),
-                    Background = AppTheme.BrandGradient,
-                    Child = new MdiIcon("translate", 21, Brushes.White)
-                },
-                new StackPanel
-                {
+                    Text = "AI Translate",
                     VerticalAlignment = VerticalAlignment.Center,
-                    Children =
-                    {
-                        new TextBlock { Text = "AI Translate", FontSize = 17, FontWeight = FontWeight.Bold, Foreground = AppTheme.TextPrimary },
-                        new TextBlock { Text = "Cognitive Lexicon Studio", FontSize = 11, Foreground = AppTheme.TextMuted }
-                    }
+                    FontSize = AppTheme.Type.Title,
+                    FontWeight = FontWeight.SemiBold,
+                    Foreground = AppTheme.TextPrimary
                 }
             }
         };
+        var brandBox = new DockPanel { Height = 64 };
+        if (leadingButtons is not null)
+        {
+            DockPanel.SetDock(leadingButtons, Dock.Left);
+            brandBox.Children.Add(leadingButtons);
+        }
+        brandBox.Children.Add(WindowTitleBar.CreateDragArea(this, wordmark));
 
         var navStack = new StackPanel
         {
@@ -360,8 +391,8 @@ public sealed class MainWindow : Window
 
         var captureHeader = new TextBlock
         {
-            Text = "全场景即时捕获",
-            FontSize = 11,
+            Text = "快捷捕获",
+            FontSize = AppTheme.Type.Caption,
             FontWeight = FontWeight.SemiBold,
             Foreground = AppTheme.TextMuted,
             Margin = new Thickness(18, 20, 18, 8)
@@ -369,13 +400,13 @@ public sealed class MainWindow : Window
 
         var captureStack = new StackPanel
         {
-            Spacing = 7,
+            Spacing = 2,
             Margin = new Thickness(12, 0),
             Children =
             {
-                CreateQuickCaptureBtn("crop-free", "XCapture 截图翻译 (Alt+S)", AppTheme.AccentSoft, AppTheme.AccentBright, () => _ = _screenshotCoordinator.StartCaptureAndTranslateAsync()),
-                CreateQuickCaptureBtn("cursor-text", "灵动划词速译 (Alt+Q)", AppTheme.AccentSoft, AppTheme.AccentBright, () => _ = TriggerSelectionHotkeyAsync()),
-                CreateQuickCaptureBtn("clipboard-text-outline", "读取剪贴板精翻 (Alt+W)", AppTheme.AccentSoft, AppTheme.AccentBright, () => _ = TranslateClipboardNowAsync())
+                CreateQuickCaptureBtn("crop-free", "截图翻译", AppTheme.Hues.Sky, _settingsStore.Current.ScreenshotTranslateHotkey.ToString(), () => _ = _screenshotCoordinator.StartCaptureAndTranslateAsync()),
+                CreateQuickCaptureBtn("cursor-text", "划词翻译", AppTheme.Hues.Jade, _settingsStore.Current.SelectionTranslateHotkey.ToString(), () => _ = TriggerSelectionHotkeyAsync()),
+                CreateQuickCaptureBtn("clipboard-text-outline", "剪贴板翻译", AppTheme.Hues.Violet, _settingsStore.Current.ClipboardTranslateHotkey.ToString(), () => _ = TranslateClipboardNowAsync())
             }
         };
 
@@ -384,7 +415,7 @@ public sealed class MainWindow : Window
             Background = AppTheme.CardBg,
             BorderBrush = AppTheme.BorderSubtle,
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(12),
+            CornerRadius = new CornerRadius(AppTheme.Radius.L),
             Padding = new Thickness(14, 12),
             Margin = new Thickness(12, 12, 12, 14),
             Child = new StackPanel
@@ -392,7 +423,7 @@ public sealed class MainWindow : Window
                 Spacing = 6,
                 Children =
                 {
-                    new TextBlock { Text = "后台自动化感知", FontSize = 11.5, FontWeight = FontWeight.SemiBold, Foreground = AppTheme.TextSecondary },
+                    new TextBlock { Text = "自动捕获", FontSize = AppTheme.Type.Caption, FontWeight = FontWeight.SemiBold, Foreground = AppTheme.TextSecondary },
                     _clipboardMonitorToggle,
                     _selectionMonitorToggle
                 }
@@ -401,8 +432,7 @@ public sealed class MainWindow : Window
 
         var dock = new DockPanel
         {
-            LastChildFill = false,
-            Children = { brandBox, navStack, captureHeader, captureStack, monitorCard }
+            Children = { brandBox, navStack, captureHeader, captureStack, monitorCard, WindowTitleBar.CreateDragArea(this) }
         };
         DockPanel.SetDock(brandBox, Dock.Top);
         DockPanel.SetDock(navStack, Dock.Top);
@@ -413,8 +443,6 @@ public sealed class MainWindow : Window
         return new Border
         {
             Background = AppTheme.SidebarBg,
-            BorderBrush = AppTheme.BorderSubtle,
-            BorderThickness = new Thickness(0, 0, 1, 0),
             Child = dock
         };
     }
@@ -425,11 +453,24 @@ public sealed class MainWindow : Window
         _dueBadgeText.Text = stats.DueTodayCount.ToString();
         _dueBadgeBorder.IsVisible = stats.DueTodayCount > 0;
         _dictionaryView.RefreshNotebooks();
+        _selectionPopup.RefreshBookmark();
         _vocabularyView.RefreshAll();
     }
 
-    public void SwitchTab(int index)
+    public void SwitchTab(int index, string? reviewNotebookId = null)
     {
+        _pageTools.Content = index switch
+        {
+            0 => new TextBlock
+            {
+                Text = "查词与翻译", FontSize = AppTheme.Type.Title,
+                FontWeight = FontWeight.SemiBold, Foreground = AppTheme.TextPrimary
+            },
+            1 => _vocabularyView.Toolbar,
+            2 => _reviewView.Toolbar,
+            3 => _settingsView.Toolbar,
+            _ => null
+        };
         _dictionaryView.IsVisible = index == 0;
         _vocabularyView.IsVisible = index == 1;
         _reviewView.IsVisible = index == 2;
@@ -440,8 +481,9 @@ public sealed class MainWindow : Window
         UpdateNavHighlight(_navReviewBtn, index == 2);
         UpdateNavHighlight(_navSettingsBtn, index == 3);
 
+        if (index == 0 && IsVisible) _dictionaryView.FocusInput();
         if (index == 1) _vocabularyView.RefreshAll();
-        if (index == 2) _reviewView.RefreshDecksAndStart();
+        if (index == 2) _reviewView.RefreshDecksAndStart(reviewNotebookId);
     }
 
     private void RegisterGlobalHotkeys()
@@ -486,8 +528,11 @@ public sealed class MainWindow : Window
 
     public void ShowAndActivate()
     {
-        if (!IsVisible) Show();
+        var reopening = !IsVisible || WindowState == WindowState.Minimized;
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        if (reopening && WindowState == WindowState.Normal)
+            FitToWorkingArea(new Size(Width, Height), recenter: true);
+        if (!IsVisible) Show();
         Activate();
     }
 
@@ -497,10 +542,11 @@ public sealed class MainWindow : Window
     {
         var btn = new Button
         {
+            Classes = { "nav" },
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Left,
             Padding = new Thickness(14, 11),
-            CornerRadius = new CornerRadius(10),
+            CornerRadius = new CornerRadius(AppTheme.Radius.M),
             BorderThickness = new Thickness(0),
             Background = Brushes.Transparent,
             Content = new StackPanel
@@ -521,32 +567,41 @@ public sealed class MainWindow : Window
     private static void UpdateNavHighlight(Button btn, bool active)
     {
         btn.Background = active ? AppTheme.AccentSoft : Brushes.Transparent;
+        btn.Classes.Set("active", active);
         if (btn.Content is StackPanel sp && sp.Children[0] is MdiIcon icon && sp.Children[1] is TextBlock tb)
         {
             icon.Foreground = active ? AppTheme.AccentBright : AppTheme.TextSecondary;
             tb.Foreground = active ? AppTheme.AccentBright : AppTheme.TextPrimary;
-            tb.FontWeight = active ? FontWeight.Bold : FontWeight.Medium;
+            tb.FontWeight = active ? FontWeight.SemiBold : FontWeight.Medium;
         }
     }
 
-    private static Button CreateQuickCaptureBtn(string icon, string label, IBrush bg, IBrush fg, Action onClick)
+    private static Button CreateQuickCaptureBtn(string icon, string label, Hue hue, string shortcut, Action onClick)
     {
+        var keycap = StudioUi.CreateKeycap(shortcut);
+        Grid.SetColumn(keycap, 2);
         var btn = new Button
         {
+            Classes = { "nav" },
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            HorizontalContentAlignment = HorizontalAlignment.Left,
-            Background = bg,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
-            CornerRadius = new CornerRadius(9),
-            Padding = new Thickness(12, 9),
-            Content = new StackPanel
+            CornerRadius = new CornerRadius(AppTheme.Radius.S),
+            Padding = new Thickness(10, 6),
+            Content = new Grid
             {
-                Orientation = Orientation.Horizontal,
-                Spacing = 10,
+                ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
+                ColumnSpacing = 10,
                 Children =
                 {
-                    new MdiIcon(icon, 16, fg),
-                    new TextBlock { Text = label, FontSize = 12.5, FontWeight = FontWeight.SemiBold, Foreground = fg, VerticalAlignment = VerticalAlignment.Center }
+                    new Border
+                    {
+                        Width = 24, Height = 24, CornerRadius = new CornerRadius(7), Background = hue.Soft,
+                        Child = new MdiIcon(icon, 14, hue.Ink)
+                    },
+                    new TextBlock { [Grid.ColumnProperty] = 1, Text = label, FontSize = 12.5, FontWeight = FontWeight.Medium, Foreground = AppTheme.TextPrimary, VerticalAlignment = VerticalAlignment.Center },
+                    keycap
                 }
             }
         };

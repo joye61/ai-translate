@@ -1,7 +1,33 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <KokoroModelPath Condition="'$(KokoroModelPath)' == '' and Exists('$(MSBuildProjectDirectory)/../../kokoro.onnx')">$(MSBuildProjectDirectory)/../../kokoro.onnx</KokoroModelPath>
+    <_RestoreKokoro Condition="'$(KokoroModelPath)' == ''">true</_RestoreKokoro>
+    <KokoroModelPath Condition="'$(_RestoreKokoro)' == 'true'">$(MSBuildProjectDirectory)/obj/model-cache/kokoro.onnx</KokoroModelPath>
+    <_ModelSha256>7D5DF8ECF7D4B1878015A32686053FD0EEBE2BC377234608764CC0EF3636A6C5</_ModelSha256>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../AiTranslate.Core/AiTranslate.Core.csproj" />
-    <PackageReference Include="KokoroSharp" Version="0.6.7" />
+    <PackageReference Include="KokoroSharp" Version="0.6.7" GeneratePathProperty="true" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="$(KokoroModelPath)" Link="KokoroModels/kokoro.onnx" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Models/*" Link="KokoroModels/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- The SDK's own target only copies to OutputPath, not PublishDir. Keep its runtime layout. -->
+    <Content Include="$(PkgKokoroSharp)/content/voices/**/*" Link="voices/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(PkgKokoroSharp)/content/espeak/**/*" Link="espeak/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="PrepareBundledSpeechModel" BeforeTargets="PrepareForBuild">
+    <MakeDir Condition="'$(_RestoreKokoro)' == 'true' and !Exists('$(KokoroModelPath)')" Directories="$(MSBuildProjectDirectory)/obj/model-cache" />
+    <DownloadFile Condition="'$(_RestoreKokoro)' == 'true' and !Exists('$(KokoroModelPath)')"
+                  SourceUrl="https://github.com/taylorchu/kokoro-onnx/releases/download/v0.2.0/kokoro.onnx"
+                  DestinationFolder="$(MSBuildProjectDirectory)/obj/model-cache" DestinationFileName="kokoro.onnx.download" Retries="2" />
+    <VerifyFileHash Condition="'$(_RestoreKokoro)' == 'true' and !Exists('$(KokoroModelPath)')"
+                    File="$(KokoroModelPath).download" Hash="$(_ModelSha256)" Algorithm="SHA256" />
+    <Move Condition="'$(_RestoreKokoro)' == 'true' and !Exists('$(KokoroModelPath)')"
+          SourceFiles="$(KokoroModelPath).download" DestinationFiles="$(KokoroModelPath)" />
+    <VerifyFileHash File="$(KokoroModelPath)" Hash="$(_ModelSha256)" Algorithm="SHA256" />
+    <Error Condition="!Exists('$(PkgKokoroSharp)/content/voices/af_heart.npy') or !Exists('$(PkgKokoroSharp)/content/espeak/espeak-ng-data/en_dict')"
+           Text="KokoroSharp voice or phonemizer assets are missing. Restore NuGet packages before publishing." />
+  </Target>
 </Project>
