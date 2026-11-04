@@ -36,12 +36,19 @@ public sealed partial class VocabularyService
                 var card = _store.Entries[i];
                 // A cache hit can repair an interrupted notebook write. Legacy or manually created
                 // cards without a revision adopt AI content only on a fresh request.
-                if (card.DictionaryRevision >= revision || (result.Origin == DictionaryResultOrigin.Cache && card.DictionaryRevision == 0) ||
+                if (card.DictionaryRevision >= revision || (result.Origin == DictionaryResultOrigin.Cache &&
+                    card.DictionaryRevision == 0 && result.ReviewedBlocks.Count == 0) ||
                     !MatchesDictionary(card, result.SourceText.Trim(), result.TargetLanguage, result.LookupContext)) continue;
+                var reviewed = result.ReviewedBlocks.Count > 0 && result.Origin is DictionaryResultOrigin.Cache or DictionaryResultOrigin.Reviewed;
+                if (reviewed && (card.ItemType != result.ItemType || card.Translation != result.PrimaryTranslation ||
+                    card.DictionaryCacheKey is { } key && result.CacheStamp?.Key != key)) continue;
                 updated ??= new(_store.Entries);
-                updated[i] = ApplyDictionary(card, result, revision) with
+                var refreshed = !reviewed ? ApplyDictionary(card, result, revision)
+                    : result.ReviewedBlocks.Aggregate(card, (current, block) => ApplyReviewedBlock(current, result, block));
+                updated[i] = refreshed with
                 {
-                    DictionaryContext = result.LookupContext, UpdatedAt = DateTimeOffset.UtcNow
+                    DictionaryContext = result.LookupContext, DictionaryRevision = revision,
+                    DictionaryCacheKey = result.CacheStamp?.Key, ReaderLanguage = result.ReaderLanguage, UpdatedAt = DateTimeOffset.UtcNow
                 };
             }
             if (updated is null) return;
@@ -52,6 +59,43 @@ public sealed partial class VocabularyService
 
     private static string GetGrammarNotes(DictionaryEntryResult result) =>
         string.Join("\n", new[] { result.GrammarBreakdown, result.UsageNotes }.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct());
+
+    // Only replay reviewed sections on existing cards. Other cards for a lookup may have richer
+    // examples, a personal translation or different organization than the cached dictionary result.
+    private static VocabularyEntry ApplyReviewedBlock(VocabularyEntry card, DictionaryEntryResult r, EntryBlock block) => block switch
+    {
+        EntryBlock.Senses => card with { Senses = r.Senses },
+        EntryBlock.Collocations => card with { Collocations = r.Collocations },
+        EntryBlock.Examples => card with { Examples = r.Examples },
+        EntryBlock.Inflections => card with { Inflections = r.Inflections },
+        EntryBlock.WordFamily => card with { WordFamily = r.WordFamily },
+        EntryBlock.LiteralTranslation => card with { LiteralTranslation = r.LiteralTranslation },
+        EntryBlock.Source => card with { SourceReadingNote = r.SourceReadingNote },
+        EntryBlock.PronunciationPractice => card with { PronunciationTip = r.PronunciationTip },
+        EntryBlock.Glossary => card with { GlossaryReferences = r.GlossaryReferences, GlossaryUsageNote = r.GlossaryUsageNote },
+        EntryBlock.Alignment => card with { Alignment = r.Alignment },
+        EntryBlock.KeyPoints => card with { KeyPoints = r.KeyPoints },
+        EntryBlock.Variants => card with { Variants = r.Variants },
+        EntryBlock.TranslationOptions => card with { TranslationOptions = r.TranslationOptions },
+        EntryBlock.Decisions => card with { TranslationDecisions = r.TranslationDecisions },
+        EntryBlock.Structure => card with { Clauses = r.Clauses },
+        EntryBlock.Grammar => card with { GrammarHighlights = r.GrammarHighlights },
+        EntryBlock.LiteralMeaning => card with { LiteralMeaning = r.LiteralMeaning },
+        EntryBlock.ContextMeaning => card with { DictionaryContextMeaning = r.ContextMeaning },
+        EntryBlock.UsageContrasts => card with { UsageContrasts = r.UsageContrasts },
+        EntryBlock.SynonymNuances => card with { SynonymNuances = r.SynonymNuances },
+        EntryBlock.Mistakes => card with { Mistakes = r.Mistakes },
+        EntryBlock.UsageNotes => card with { GrammarOrUsageNote = GetGrammarNotes(r),
+            WordChoice = r.WordChoice, CommonMistakes = r.CommonMistakes,
+            DictionaryContextMeaning = r.ItemType.IsPassage() ? r.ContextMeaning : card.DictionaryContextMeaning },
+        EntryBlock.Tone => card with { Tone = r.Tone },
+        EntryBlock.Culture => card with { CulturalNote = r.CulturalNote },
+        EntryBlock.Thesaurus => card with { Synonyms = r.Synonyms, Antonyms = r.Antonyms },
+        EntryBlock.WordFormation => card with { Morphemes = r.Morphemes, EtymologyAndRoot = r.EtymologyAndRoot ?? "" },
+        EntryBlock.Mnemonic => card with { MemoryMnemonic = r.MemoryMnemonic ?? "" },
+        EntryBlock.Tags => card with { SuggestedTags = r.SuggestedTags },
+        _ => throw new ArgumentOutOfRangeException(nameof(block))
+    };
 
     // An old offline result may be collected again after a card has been enriched.
     // Preserve details only when the older response identifies the same sense unambiguously.
@@ -87,7 +131,16 @@ public sealed partial class VocabularyService
     private static VocabularyEntry ApplyDictionary(VocabularyEntry card, DictionaryEntryResult result, long revision) => card with
     {
         Translation = result.PrimaryTranslation,
+        LiteralTranslation = result.LiteralTranslation,
         DictionaryRevision = revision,
+        DictionaryCacheKey = result.CacheStamp?.Key,
+        ReaderLanguage = result.ReaderLanguage,
+        DictionaryContextMeaning = result.ContextMeaning,
+        SuggestedTags = result.SuggestedTags,
+        GlossaryReferences = result.GlossaryReferences,
+        SourceReadingNote = result.SourceReadingNote,
+        GlossaryUsageNote = result.GlossaryUsageNote,
+        PronunciationTip = result.PronunciationTip,
         ItemType = result.ItemType,
         SourceLanguage = result.DetectedSourceLanguage,
         TargetLanguage = result.TargetLanguage,

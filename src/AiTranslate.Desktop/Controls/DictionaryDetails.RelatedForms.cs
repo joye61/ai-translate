@@ -47,14 +47,15 @@ internal sealed partial class DictionaryDetails
             notes.Children.Add(label);
         }
 
-        if (!string.IsNullOrWhiteSpace(form.Usage)) notes.Children.Add(RichText.Create(form.Usage, TextRole.Secondary));
-        if (example.Length > 0)
+        if (!string.IsNullOrWhiteSpace(form.Usage)) notes.Children.Add(RichText.Create(form.Usage, TextRole.Annotation));
+        if (example.Length > 0 && example != form.Example?.SourceSentence)
         {
             var phrase = _finished is null ? TextStyles.Selectable(example, TextRole.ExampleSource)
                 : TextStyles.Apply(new DictionaryReadingText(example, (word, sentence) => lookup(word, sentence, false),
                     [form.Value], termForeground: AppTheme.AccentBright), TextRole.ExampleSource);
             notes.Children.Add(StudioUi.CreateKeyValue("示例", phrase));
         }
+        if (form.Example is { } bilingual) AddExample(notes, bilingual);
         return [identity, notes];
     }
 }

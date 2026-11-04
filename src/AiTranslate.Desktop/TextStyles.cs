@@ -5,7 +5,7 @@ namespace AiTranslate.Desktop;
 
 /// <summary>
 /// Semantic text roles. Pick the role that describes what the text <em>is</em>, never a raw size/color.
-/// The full table lives in AGENTS.md §4.2 "文字层级".
+/// TextStyles.Get defines the typography for each role.
 /// </summary>
 public enum TextRole
 {
@@ -27,11 +27,13 @@ public enum TextRole
     Body,
     /// <summary>Explanations, notes, scenarios (13.5 Regular, secondary).</summary>
     Secondary,
+    /// <summary>A short annotation attached to a rendering or expression.</summary>
+    Annotation,
     /// <summary>English gloss of a definition (13 Italic, secondary).</summary>
     Gloss,
-    /// <summary>Example sentence in the source language (13.5 Regular, primary).</summary>
+    /// <summary>The source in a bilingual pair.</summary>
     ExampleSource,
-    /// <summary>Translation of an example sentence (13 Regular, secondary).</summary>
+    /// <summary>The target in a bilingual pair.</summary>
     ExampleTarget,
     /// <summary>Field label in a key–value row, e.g. 用法 / 场景 / 近义词 (12 SemiBold, muted).</summary>
     Label,
@@ -63,9 +65,10 @@ public static class TextStyles
         TextRole.Term => new(14, FontWeight.SemiBold, AppTheme.TextPrimary, 22),
         TextRole.Body => new(AppTheme.Type.Body, FontWeight.Normal, AppTheme.TextPrimary, 22),
         TextRole.Secondary => new(AppTheme.Type.Body, FontWeight.Normal, AppTheme.TextSecondary, 22),
+        TextRole.Annotation => new(AppTheme.Type.Small, FontWeight.Normal, AppTheme.AnnotationInk, 20),
         TextRole.Gloss => new(13, FontWeight.Normal, AppTheme.TextSecondary, 21, FontStyle.Italic),
-        TextRole.ExampleSource => new(AppTheme.Type.Body, FontWeight.Normal, AppTheme.TextPrimary, 22),
-        TextRole.ExampleTarget => new(13, FontWeight.Normal, AppTheme.TextSecondary, 21),
+        TextRole.ExampleSource => new(AppTheme.Type.BodyLarge, FontWeight.Medium, AppTheme.TextPrimary, 24),
+        TextRole.ExampleTarget => new(AppTheme.Type.Body, FontWeight.Normal, AppTheme.PairedTranslationInk, 22),
         TextRole.Label => new(12, FontWeight.SemiBold, AppTheme.TextMuted, 21),
         TextRole.FieldLabel => new(AppTheme.Type.Small, FontWeight.Medium, AppTheme.TextSecondary),
         TextRole.PartOfSpeech => new(12, FontWeight.SemiBold, AppTheme.TextSecondary, Mono: true),

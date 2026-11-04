@@ -65,6 +65,9 @@ public sealed record WordInflection(
 public sealed record RelatedForm(string Label, string Value, string PartOfSpeech = "", string Relation = "",
     string Usage = "", string Expression = "")
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public BilingualExample? Example { get; init; }
+
     public bool IsSameFormOf(string headword) => Relation == "sameForm" &&
         string.Equals(Value, headword.Trim(), StringComparison.OrdinalIgnoreCase);
 }
@@ -82,9 +85,13 @@ public sealed record CollocationItem(
     string Meaning,
     string SenseHint = "",
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    BilingualExample? Example = null);
+    BilingualExample? Example = null)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? UsageNote { get; init; }
+}
 
-public enum DictionaryResultOrigin { Ai, Cache, BuiltIn, Supplemented }
+public enum DictionaryResultOrigin { Ai, Cache, BuiltIn, Supplemented, Reviewed }
 
 public sealed record GrammarHighlight(string Quote, string Label, string Explanation);
 
@@ -103,13 +110,23 @@ public sealed record DictionaryEntryResult
 {
     public required string SourceText { get; init; }
     public required string PrimaryTranslation { get; init; }
+    public string LiteralTranslation { get; init; } = "";
     [System.Text.Json.Serialization.JsonIgnore]
     public DictionaryResultOrigin Origin { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public DictionaryCacheStamp? CacheStamp { get; init; }
+    // Set only on a confirmed cache revision whose matching notebook cards could not be synced.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool NotebookSyncPending { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string LookupContext { get; init; } = "";
     public IReadOnlyList<CollocationItem> GlossaryReferences { get; init; } = [];
+    public string SourceReadingNote { get; init; } = "";
+    public string GlossaryUsageNote { get; init; } = "";
+    public string PronunciationTip { get; init; } = "";
+    public IReadOnlyList<EntryBlock> ReviewedBlocks { get; init; } = [];
+    // Cache metadata. Older entries can be reviewed once when an engine becomes available.
+    public bool LexicalCoverageReviewed { get; init; }
     public string Pronunciation { get; init; } = "";
     public string CommonMistakes { get; init; } = "";
     public string WordChoice { get; init; } = "";
@@ -173,10 +190,19 @@ public sealed record VocabularyEntry
     public required string Id { get; init; }
     public required string Headword { get; init; }
     public required string Translation { get; init; }
+    public string LiteralTranslation { get; init; } = "";
     public string NotebookId { get; init; } = "default";
     // The lookup context identifies a dictionary result. The displayed capture can also be a suggested example.
     public string? DictionaryContext { get; init; }
     public long DictionaryRevision { get; init; }
+    public string? DictionaryCacheKey { get; init; }
+    public string? ReaderLanguage { get; init; }
+    public string? DictionaryContextMeaning { get; init; }
+    public IReadOnlyList<string> SuggestedTags { get; init; } = [];
+    public IReadOnlyList<CollocationItem> GlossaryReferences { get; init; } = [];
+    public string SourceReadingNote { get; init; } = "";
+    public string GlossaryUsageNote { get; init; } = "";
+    public string PronunciationTip { get; init; } = "";
 
     public string GetDictionaryContext() => DictionaryContext ??
         (ContextSentence == Examples.FirstOrDefault()?.SourceSentence ? "" : ContextSentence.Trim().ReplaceLineEndings("\n"));

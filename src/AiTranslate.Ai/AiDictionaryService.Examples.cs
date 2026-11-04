@@ -67,10 +67,10 @@ public sealed partial class AiDictionaryService
     }
 
     private async Task<DictionaryEntryResult> PersistSupplementAsync(DictionaryEntryResult original, DictionaryEntryResult updated,
-        long started, CancellationToken token)
+        long started, CancellationToken token, DictionaryResultOrigin origin = DictionaryResultOrigin.Supplemented)
     {
         token.ThrowIfCancellationRequested();
-        updated = updated with { Origin = DictionaryResultOrigin.Supplemented };
+        updated = updated with { Origin = origin };
         var revision = started;
         if (original.CacheStamp is { } stamp && cache is not null)
         {
@@ -79,7 +79,19 @@ public sealed partial class AiDictionaryService
             if (!replaced) throw new AiException("本地词条已更新，请重新打开最新词条后再补充。");
             updated = updated with { CacheStamp = new(stamp.Key, revision) };
         }
-        refreshCollectedEntries?.Invoke(updated, revision);
-        return updated;
+        return SyncCollectedEntries(updated, revision);
+    }
+
+    private DictionaryEntryResult SyncCollectedEntries(DictionaryEntryResult result, long revision)
+    {
+        try { refreshCollectedEntries?.Invoke(result, revision); }
+        catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) &&
+            cache is not null && result.CacheStamp?.Revision == revision)
+        {
+            // The cache has committed. A later cache hit retries the notebook write with its
+            // revision guard; the UI can already show this version without another AI request.
+            return result with { NotebookSyncPending = true };
+        }
+        return result.NotebookSyncPending ? result with { NotebookSyncPending = false } : result;
     }
 }

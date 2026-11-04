@@ -1,4 +1,4 @@
-﻿using Avalonia;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -161,9 +161,9 @@ public static class StudioUi
     }
 
     /// <summary>Short typed label (part of speech, register, tag). Neutral warm gray unless a category <paramref name="hue"/> is given.</summary>
-    public static Border CreateTag(string text, TextRole role = TextRole.PartOfSpeech, Hue? hue = null)
+    public static Border CreateTag(string text, TextRole role = TextRole.PartOfSpeech, Hue? hue = null, bool wrap = false)
     {
-        var label = TextStyles.Create(text, role, wrap: false);
+        var label = TextStyles.Create(text, role, wrap);
         if (hue is not null) label.Foreground = hue.Ink;
         return new Border
         {

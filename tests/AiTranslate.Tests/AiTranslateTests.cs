@@ -565,13 +565,41 @@ public sealed class AiTransportThinkingTests
         }
     }
 
-    private static async Task<JsonObject> CaptureBodyAsync(string providerId, string modelId, string? baseUrl = null)
+    [Fact]
+    public async Task JsonOutputIsRequestedForReviewsOnTheNativeDeepSeekEndpoint()
+    {
+        var official = await CaptureBodyAsync("deepseek", "deepseek-flash", "https://api.deepseek.com/v1", jsonOutput: true);
+        Assert.Equal("json_object", (string?)official["response_format"]?["type"]);
+        Assert.False((await CaptureBodyAsync("deepseek", "deepseek-flash")).ContainsKey("response_format"));
+        Assert.False((await CaptureBodyAsync("compatible", "custom", "http://localhost:8000/v1", jsonOutput: true)).ContainsKey("response_format"));
+    }
+
+    [Theory]
+    [InlineData(EntryBlock.Senses)]
+    [InlineData(EntryBlock.Mnemonic)]
+    public async Task RealReviewRequestSatisfiesTheJsonModePromptRequirement(EntryBlock block)
+    {
+        var requests = 0;
+        using var client = new HttpClient(new CapturingHandler(body =>
+        {
+            requests++;
+            Assert.Equal("json_object", (string?)body["response_format"]?["type"]);
+            Assert.Contains("JSON", (string)body["messages"]![0]!["content"]!, StringComparison.OrdinalIgnoreCase);
+        }, sse: "data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"status\\\":\\\"unchanged\\\"}\"}}]}\n\ndata: [DONE]\n\n"));
+        var service = new AiDictionaryService(() => new AiTransport(new("deepseek", "deepseek-flash"), client));
+        var entry = new DictionaryEntryResult { SourceText = "test", PrimaryTranslation = "检验" };
+        Assert.Same(entry, await service.ReviewBlockAsync(entry, block, default));
+        Assert.Equal(1, requests);
+    }
+
+    private static async Task<JsonObject> CaptureBodyAsync(string providerId, string modelId, string? baseUrl = null, bool jsonOutput = false)
     {
         JsonObject? capturedBody = null;
         using var client = new HttpClient(new CapturingHandler(body => capturedBody = body));
         using var transport = new AiTransport(new AiProviderConfig(providerId, modelId, baseUrl, "test-key"), client);
-        await transport.CompleteAsync(
-            [new JsonObject { ["role"] = "user", ["content"] = "hi" }], [], _ => { }, CancellationToken.None);
+        JsonObject[] messages = [new JsonObject { ["role"] = "user", ["content"] = "Return JSON." }];
+        if (jsonOutput) await transport.CompleteJsonAsync(messages, _ => { }, CancellationToken.None);
+        else await transport.CompleteAsync(messages, [], _ => { }, CancellationToken.None);
         Assert.NotNull(capturedBody);
         return capturedBody!;
     }

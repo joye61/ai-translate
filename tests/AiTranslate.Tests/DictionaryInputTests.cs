@@ -509,6 +509,86 @@ public sealed class DictionaryInputTests
     }
 
     [Fact]
+    public async Task ReviewButtonsBelongToFinishedSectionsAndKeepTheReadingInPlace()
+    {
+        await RunInStudio((window, view, dictionary, _) =>
+        {
+            var entry = new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡",
+                DetectedSourceLanguage = "en", Senses = [new("n.", "咖啡")], UsageNotes = "按杯点单时可数。",
+                LiteralTranslation = "咖啡饮品" };
+            view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
+            window.UpdateLayout();
+            var sections = view.GetVisualDescendants().OfType<DictionarySection>().Where(s => s.IsEffectivelyVisible).ToArray();
+            Assert.True(sections.Length >= 3);
+            foreach (var section in sections)
+                Assert.Equal($"智能复核 · {section.Title}", AutomationProperties.GetName(Assert.IsType<Button>(section.ActionSlot.Content)));
+            Assert.Contains(view.GetVisualDescendants().OfType<Button>(), b => AutomationProperties.GetName(b) == "智能复核 · 直译对照");
+            var target = sections.Single(s => s.Title == "词性与释义");
+            var button = (Button)target.ActionSlot.Content!;
+            var input = view.GetVisualDescendants().OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "待翻译文本");
+            var flow = view.GetVisualDescendants().OfType<FlowingBorderEffect>().Single();
+            input.Text = "下一个词";
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(EntryBlock.Senses, dictionary.ReviewedBlock);
+            Assert.False(input.IsEffectivelyEnabled);
+            Assert.False(flow.IsVisible);
+            Assert.All(sections, s => Assert.False(((Button)s.ActionSlot.Content!).IsEnabled));
+            dictionary.ReviewPreview!(entry with { Senses = [new("n.", "预览中的释义")], LiteralTranslation = "其他栏目的草稿" });
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.Contains("预览中的释义", Messages(view));
+            Assert.Contains("咖啡饮品", Messages(view));
+            Assert.DoesNotContain("其他栏目的草稿", Messages(view));
+            dictionary.Supplement.SetResult(entry);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.DoesNotContain("预览中的释义", Messages(view));
+            Assert.True(input.IsEffectivelyEnabled);
+            Assert.Equal("下一个词", input.Text);
+            Assert.True(button.IsEnabled);
+            Assert.Contains(button.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "无需调整");
+            Assert.Same(button, target.ActionSlot.Content);
+        });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LiteralReviewStreamsLocallyAndDropsLateFramesAfterSuccessOrFailure(bool fail)
+    {
+        await RunInStudio((window, view, dictionary, _) =>
+        {
+            var entry = new DictionaryEntryResult { SourceText = "kick the bucket", PrimaryTranslation = "去世",
+                LiteralTranslation = "踢桶", Senses = [new("v.", "去世")] };
+            view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
+            window.UpdateLayout();
+            var button = view.GetVisualDescendants().OfType<Button>()
+                .Single(b => AutomationProperties.GetName(b) == "智能复核 · 直译对照");
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var draft = entry with { LiteralTranslation = "踢那个" };
+            dictionary.ReviewPreview!(draft);
+            Dispatcher.UIThread.RunJobs();
+            Assert.Contains("踢那个", Messages(view));
+            if (fail) dictionary.Supplement.SetException(new AiException("连接中断"));
+            else dictionary.Supplement.SetResult(entry with { LiteralTranslation = "踢那个桶" });
+            Dispatcher.UIThread.RunJobs();
+            dictionary.ReviewPreview!(draft);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.Contains(fail ? "踢桶" : "踢那个桶", Messages(view));
+            Assert.DoesNotContain("踢那个", Messages(view));
+            Assert.True(view.GetVisualDescendants().OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "待翻译文本").IsEffectivelyEnabled);
+            Assert.Equal(fail, view.GetVisualDescendants().OfType<DictionaryTranslations>().Single()
+                .GetVisualDescendants().OfType<TextBlock>().Any(t => t.IsEffectivelyVisible && t.Text?.Contains("连接中断") == true));
+            if (fail)
+            {
+                Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "连接中断。已保留原内容。");
+                Assert.Contains(button.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "重新复核");
+            }
+        });
+    }
+
+    [Fact]
     public async Task SupplementKeepsTheOriginalVisibleAndCannotReplaceANewerLookup()
     {
         await RunInStudio((window, view, dictionary, vocabulary) =>
@@ -823,6 +903,15 @@ public sealed class DictionaryInputTests
     {
         public List<Request> Requests { get; } = [];
         public TaskCompletionSource<DictionaryEntryResult> Supplement { get; } = new();
+        public EntryBlock? ReviewedBlock { get; private set; }
+        public Action<DictionaryEntryResult>? ReviewPreview { get; private set; }
+        public Task<DictionaryEntryResult> ReviewBlockAsync(DictionaryEntryResult entry, EntryBlock block, CancellationToken cancellationToken,
+            Action<DictionaryEntryResult>? onPreview = null)
+        {
+            ReviewPreview = onPreview;
+            ReviewedBlock = block;
+            return CompleteExamplesAsync(entry, entry.LookupContext, cancellationToken);
+        }
         public Task<DictionaryEntryResult> CheckLexicalCoverageAsync(DictionaryEntryResult entry, string? context, CancellationToken cancellationToken) =>
             CompleteExamplesAsync(entry, context, cancellationToken);
         public CancellationToken SupplementToken { get; private set; }

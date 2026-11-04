@@ -40,20 +40,24 @@ public sealed class DictionaryEntryCache(string? databasePath = null) : IDiction
     public bool Write(string key, DictionaryEntryResult result, long requestTicks) =>
         Upsert("dictionary", key, JsonSerializer.Serialize(result), requestTicks);
 
+    public bool TryAdd(string key, DictionaryEntryResult result, long requestTicks) =>
+        Upsert("dictionary", key, JsonSerializer.Serialize(result), requestTicks, insertOnly: true);
+
     public void WriteTranslations(string key, string[] translations, long requestTicks) =>
         Upsert("verified_translations", key, JsonSerializer.Serialize(translations), requestTicks);
 
-    private bool Upsert(string table, string key, string json, long requestTicks)
+    private bool Upsert(string table, string key, string json, long requestTicks, bool insertOnly = false)
     {
         using var db = Open();
         using var command = db.CreateCommand();
         command.CommandText = $"""
             INSERT INTO {table}(cache_key, entry, request_ticks) VALUES($key, $entry, $ticks)
             ON CONFLICT(cache_key) DO UPDATE SET entry = excluded.entry, request_ticks = excluded.request_ticks
-            WHERE excluded.request_ticks >= {table}.request_ticks
+            WHERE NOT $insertOnly AND excluded.request_ticks >= {table}.request_ticks
             """;
         command.Parameters.AddWithValue("$key", key);
         command.Parameters.AddWithValue("$entry", json);
+        command.Parameters.AddWithValue("$insertOnly", insertOnly);
         command.Parameters.AddWithValue("$ticks", requestTicks);
         return command.ExecuteNonQuery() == 1;
     }

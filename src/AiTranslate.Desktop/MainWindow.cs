@@ -151,7 +151,7 @@ public sealed class MainWindow : Window
                 SwitchTab(0);
             },
             onSwitchToReview: notebookId => SwitchTab(2, notebookId),
-            SetStatus);
+            SetStatus, dictionaryService);
 
         _reviewView = new FsrsReviewArenaView(_vocabularyService, _speechService, _settingsStore, SetStatus);
         _settingsView = new EngineSettingsView(_settingsStore, _speechService, SetStatus);

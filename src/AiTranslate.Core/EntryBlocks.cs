@@ -6,7 +6,8 @@ public enum EntryBlock
     Source, KeyPoints, Variants, Decisions, Structure, Grammar,
     Senses, LiteralMeaning, ContextMeaning, Inflections, Collocations, Examples,
     UsageContrasts, SynonymNuances, Mistakes, UsageNotes, Tone, Culture,
-    Thesaurus, WordFamily, WordFormation, Mnemonic, Tags, Glossary, TranslationOptions
+    Thesaurus, WordFamily, WordFormation, Mnemonic, Tags, Glossary, TranslationOptions, LiteralTranslation, Alignment,
+    PronunciationPractice
 }
 
 /// <summary>
@@ -21,36 +22,39 @@ public sealed record EntryBlockSpec(EntryBlock Block, string Title, EntryBlockTi
 /// <summary>Single source of truth for which blocks each kind of result has, in reading order, and how they are titled.</summary>
 public static class EntryBlockCatalog
 {
+    // Shared by every item type, in the translation header before the type-specific detail blocks.
+    public static EntryBlockSpec LiteralTranslation { get; } = new(EntryBlock.LiteralTranslation, "直译对照", EntryBlockTier.Extended);
+
     private static readonly EntryBlock[] WordOrder =
     [
-        EntryBlock.TranslationOptions, EntryBlock.Senses, EntryBlock.ContextMeaning, EntryBlock.Inflections, EntryBlock.WordFamily, EntryBlock.Collocations, EntryBlock.Examples,
+        EntryBlock.Senses, EntryBlock.TranslationOptions, EntryBlock.ContextMeaning, EntryBlock.Inflections, EntryBlock.WordFamily, EntryBlock.Collocations, EntryBlock.Examples,
         EntryBlock.UsageContrasts, EntryBlock.SynonymNuances, EntryBlock.Mistakes, EntryBlock.UsageNotes, EntryBlock.Thesaurus,
-        EntryBlock.WordFormation, EntryBlock.Mnemonic, EntryBlock.Tags, EntryBlock.Glossary
+        EntryBlock.WordFormation, EntryBlock.Mnemonic, EntryBlock.Tags, EntryBlock.Glossary, EntryBlock.PronunciationPractice
     ];
 
     private static readonly EntryBlock[] PhraseOrder =
     [
-        EntryBlock.TranslationOptions, EntryBlock.Senses, EntryBlock.LiteralMeaning, EntryBlock.ContextMeaning, EntryBlock.Variants, EntryBlock.Collocations,
+        EntryBlock.Senses, EntryBlock.Variants, EntryBlock.TranslationOptions, EntryBlock.LiteralMeaning, EntryBlock.ContextMeaning, EntryBlock.Collocations,
         EntryBlock.Examples, EntryBlock.UsageContrasts, EntryBlock.SynonymNuances, EntryBlock.Mistakes, EntryBlock.UsageNotes,
         EntryBlock.Culture, EntryBlock.Inflections, EntryBlock.Thesaurus, EntryBlock.Mnemonic, EntryBlock.Tags, EntryBlock.Glossary
     ];
 
     private static readonly EntryBlock[] TermOrder =
     [
-        EntryBlock.TranslationOptions, EntryBlock.Senses, EntryBlock.ContextMeaning, EntryBlock.Collocations, EntryBlock.Examples, EntryBlock.SynonymNuances,
+        EntryBlock.Senses, EntryBlock.TranslationOptions, EntryBlock.ContextMeaning, EntryBlock.Collocations, EntryBlock.Examples, EntryBlock.SynonymNuances,
         EntryBlock.Mistakes, EntryBlock.UsageNotes, EntryBlock.Inflections, EntryBlock.Thesaurus, EntryBlock.WordFamily,
         EntryBlock.WordFormation, EntryBlock.Tags, EntryBlock.Glossary
     ];
 
     private static readonly EntryBlock[] SentenceOrder =
     [
-        EntryBlock.Source, EntryBlock.TranslationOptions, EntryBlock.Variants, EntryBlock.Decisions, EntryBlock.Structure, EntryBlock.Grammar,
+        EntryBlock.Source, EntryBlock.Variants, EntryBlock.TranslationOptions, EntryBlock.Decisions, EntryBlock.Structure, EntryBlock.Grammar,
         EntryBlock.Collocations, EntryBlock.Tone, EntryBlock.Culture, EntryBlock.UsageNotes, EntryBlock.Glossary
     ];
 
     private static readonly EntryBlock[] ParagraphOrder =
     [
-        EntryBlock.KeyPoints, EntryBlock.Source, EntryBlock.TranslationOptions, EntryBlock.Variants, EntryBlock.Decisions, EntryBlock.Grammar,
+        EntryBlock.Source, EntryBlock.Alignment, EntryBlock.Variants, EntryBlock.KeyPoints, EntryBlock.TranslationOptions, EntryBlock.Decisions, EntryBlock.Grammar,
         EntryBlock.Collocations, EntryBlock.Tone, EntryBlock.Culture, EntryBlock.UsageNotes, EntryBlock.Glossary
     ];
 
@@ -61,7 +65,7 @@ public static class EntryBlockCatalog
         VocabularyItemType.TechnicalTerm => TermOrder,
         VocabularyItemType.Sentence => SentenceOrder,
         _ => ParagraphOrder
-    }).Select(block => Spec(block, type)).ToArray();
+    }).Select(block => Spec(block, type)).Prepend(LiteralTranslation).ToArray();
 
     public static bool Applies(VocabularyItemType type, EntryBlock block) => For(type).Any(s => s.Block == block);
 
@@ -71,7 +75,9 @@ public static class EntryBlockCatalog
         var passage = type.IsPassage();
         return block switch
         {
-            EntryBlock.Source => new(block, "原文", EntryBlockTier.Core),
+            EntryBlock.Source => new(block, "完整原文", EntryBlockTier.Core),
+            EntryBlock.PronunciationPractice => new(block, "发音练习", EntryBlockTier.Extended),
+            EntryBlock.Alignment => new(block, "逐句对照", EntryBlockTier.Extended),
             EntryBlock.Senses => new(block, type switch
             {
                 VocabularyItemType.Phrase => "短语释义",

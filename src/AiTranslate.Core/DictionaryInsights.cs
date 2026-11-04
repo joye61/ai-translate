@@ -21,7 +21,7 @@ public sealed record ToneProfile(int Formality, IReadOnlyList<string> Tones, str
 public enum MorphemeKind { Prefix, Root, Suffix }
 
 /// <summary>A word-formation part, e.g. in- (向内) + spect (看) + -ion (名词后缀).</summary>
-public sealed record Morpheme(string Part, string Meaning, MorphemeKind Kind);
+public sealed record Morpheme(string Part, string Meaning, MorphemeKind Kind, string Note = "");
 
 /// <summary>A row of a near-synonym comparison table. The first row is normally the looked-up item itself.</summary>
 public sealed record SynonymNuance(string Word, string Nuance, string Register = "");

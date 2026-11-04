@@ -163,6 +163,18 @@
             <Setter Property="Opacity" Value="0.7" />
         </Style>
 
+        <Style Selector="Button.ai-review:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.InputBg}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.ai-review:pointerover:not(:disabled) /template/ ContentPresenter#PART_ContentPresenter, Button.ai-review:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.InsightSoft}" />
+            <Setter Property="BorderBrush" Value="{x:Static local:AppTheme.Insight}" />
+        </Style>
+        <Style Selector="Button.ai-review:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.CodeBg}" />
+            <Setter Property="BorderBrush" Value="{x:Static local:AppTheme.Insight}" />
+        </Style>
         <Style Selector="Button.tint:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{x:Static local:AppTheme.AccentSoft}" />
         </Style>

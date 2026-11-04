@@ -8,7 +8,7 @@ public sealed partial class AiDictionaryService
     private const int MaxUsageCases = 3;
     private const int MaxRelatedForms = 4;
 
-    private static IReadOnlyList<SenseUsageCase> ReadUsageCases(JsonElement sense)
+    private static IReadOnlyList<SenseUsageCase> ReadUsageCases(JsonElement sense, int maximum = MaxUsageCases)
     {
         if (!sense.TryGetProperty("usageCases", out var items) || items.ValueKind != JsonValueKind.Array) return [];
         var cases = new List<SenseUsageCase>();
@@ -22,7 +22,7 @@ public sealed partial class AiDictionaryService
             if (condition.Length == 0 || expression.Length == 0 || (grammar.Length == 0 && meaning.Length == 0)) continue;
             var item = new SenseUsageCase(condition, grammar, expression, meaning);
             if (!cases.Any(c => SameCase(c, item))) cases.Add(item);
-            if (cases.Count == MaxUsageCases) break;
+            if (cases.Count == maximum) break;
         }
         return cases.ToArray();
     }
@@ -31,7 +31,7 @@ public sealed partial class AiDictionaryService
         SameText(a.Condition, b.Condition) && SameText(a.Expression, b.Expression);
 
     private static IReadOnlyList<RelatedForm> ReadWordFamily(JsonElement root, string headword, bool englishWord,
-        IReadOnlyList<PartOfSpeechSense> senses, IReadOnlyList<RelatedForm>? previous = null)
+        IReadOnlyList<PartOfSpeechSense> senses, IReadOnlyList<RelatedForm>? previous = null, int maximum = MaxRelatedForms)
     {
         var existing = previous ?? [];
         if (!root.TryGetProperty("wordFamily", out var items) || items.ValueKind != JsonValueKind.Array) return existing;
@@ -46,7 +46,11 @@ public sealed partial class AiDictionaryService
             var usage = GetString(row, "usage").Trim();
             var expression = GetString(row, "expression").Trim();
             if (value.Length == 0 || (englishWord && value.Any(char.IsWhiteSpace))) continue;
-            var form = new RelatedForm(label, value, part, relation, usage, expression);
+            var example = ReadUsageExample(row, preview: false);
+            var form = new RelatedForm(label, value, part, relation, usage, expression)
+            {
+                Example = example is not null && DictionaryTextMatch.IndexOf(example.SourceSentence, value) >= 0 ? example : null
+            };
             var self = string.Equals(value, headword.Trim(), StringComparison.OrdinalIgnoreCase);
             if (relation.Length == 0)
             {
@@ -66,7 +70,7 @@ public sealed partial class AiDictionaryService
                 }
             }
             var at = forms.FindIndex(f => SameRelatedForm(f, form));
-            if (at < 0 && forms.Count < MaxRelatedForms) forms.Add(form);
+            if (at < 0 && forms.Count < maximum) forms.Add(form);
             else if (at >= 0 && string.IsNullOrEmpty(forms[at].Relation) && relation.Length > 0) forms[at] = form;
         }
         return forms.SequenceEqual(existing) ? existing : forms.ToArray();

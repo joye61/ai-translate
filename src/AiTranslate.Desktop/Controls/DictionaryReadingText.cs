@@ -36,15 +36,18 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
 
     internal static DictionaryReadingText Primary(DictionaryEntryResult entry, Action<string, string> lookup)
     {
-        var passage = entry.ItemType.IsPassage();
         var text = entry.PrimaryTranslation;
-        var options = entry.TranslationOptions.Select(o => o.Text).ToArray();
-        var terms = passage
-            ? entry.Collocations.Select(c => c.Meaning).Append(text)
-            : options.Concat(entry.PrimaryRenderings());
-        return TextStyles.Apply(new DictionaryReadingText(text, lookup, terms, standaloneTerms: !passage) { Background = Brushes.Transparent },
-            passage ? TextRole.PassageTranslation : TextRole.Translation);
+        if (entry.ItemType.IsPassage())
+            return Passage(text, lookup, entry.Collocations.Concat(entry.GlossaryReferences).Select(c => c.Meaning));
+        var terms = entry.TranslationOptions.Select(o => o.Text).Concat(entry.PrimaryRenderings());
+        return TextStyles.Apply(new DictionaryReadingText(text, lookup, terms, standaloneTerms: true), TextRole.Translation);
     }
+
+    internal static DictionaryReadingText Passage(string text, Action<string, string> lookup, IEnumerable<string> terms,
+        IEnumerable<GrammarHighlight>? grammar = null) =>
+        TextStyles.Apply(new DictionaryReadingText(text, lookup,
+            terms.Where(term => !string.Equals(term?.Trim(), text.Trim(), StringComparison.OrdinalIgnoreCase)), grammar),
+            TextRole.PassageTranslation);
 
     public DictionaryReadingText(string text, Action<string, string> lookup, IEnumerable<string> terms,
         IEnumerable<GrammarHighlight>? grammar = null, IBrush? termForeground = null, bool standaloneTerms = false)
@@ -52,6 +55,7 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
         _original = text;
         _standaloneTerms = standaloneTerms;
         _lookup = lookup;
+        Background = Brushes.Transparent;
         TextWrapping = TextWrapping.Wrap;
         LineHeight = 23;
         foreach (var highlight in grammar ?? [])
@@ -69,9 +73,8 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
                     standaloneTerms ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
                 if (at < 0) break;
                 start = at + term.Length;
-                if (!standaloneTerms || !_marks.Any(m => m.Start <= at && start <= m.End))
+                if (!_marks.Any(m => m.Term is not null && m.Start < start && at < m.End))
                     _marks.Add(new(at, start, text.Substring(at, term.Length)));
-                if (!standaloneTerms) break;
             }
         }
         if (_marks.Count == 0) Text = text;
@@ -139,13 +142,17 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
     private int HitIndex(PointerEventArgs e)
     {
         var point = e.GetPosition(this) - new Point(Padding.Left, Padding.Top);
-        var hit = TextLayout.HitTestPoint(point);
-        return hit.IsInside ? hit.CharacterHit.FirstCharacterIndex : -1;
+        var layout = TextLayout;
+        var hit = layout.HitTestPoint(point);
+        var index = hit.CharacterHit.FirstCharacterIndex;
+        // On wrapped lines Avalonia can return the right character with IsInside == false.
+        // Verify its layout bounds so blank space past the line still does nothing.
+        if (index < 0 || index >= _original.Length) return -1;
+        return hit.IsInside || layout.HitTestTextRange(index, 1).Any(bounds => bounds.Contains(point)) ? index : -1;
     }
 
     private Mark? TermAt(int index) =>
-        _marks.Where(m => m.Term is not null && m.Start <= index && index < m.End)
-            .MinBy(m => m.End - m.Start);
+        _marks.FirstOrDefault(m => m.Term is not null && m.Start <= index && index < m.End);
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
@@ -154,7 +161,7 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
         var term = TermAt(index);
         Cursor = term is null ? TextCursor : LinkCursor;
         var note = _marks.FirstOrDefault(m => m.GrammarNote is not null && m.Start <= index && index < m.End)?.GrammarNote;
-        ToolTip.SetTip(this, note ?? (term is null ? SelectionHint : $"查词 {term.Term}"));
+        ToolTip.SetTip(this, term is null ? note ?? SelectionHint : $"查词 {term.Term}");
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)

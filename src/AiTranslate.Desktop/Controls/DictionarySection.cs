@@ -13,6 +13,8 @@ internal sealed class DictionarySection : Border
     }, TextRole.Meta);
 
     private readonly TextBlock _title;
+    internal ContentControl ActionSlot { get; } = new() { [Grid.ColumnProperty] = 1 };
+    internal TextBlock ReviewError { get; } = BlockReviewActions.CreateError();
 
     public string Title
     {
@@ -37,6 +39,9 @@ internal sealed class DictionarySection : Border
             heading.Children.Add(insightIcon);
         }
         heading.Children.Add(Caption);
-        Child = new StackPanel { Spacing = AppTheme.Space.M, Children = { heading, body } };
+        heading.VerticalAlignment = VerticalAlignment.Center;
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = AppTheme.Space.S,
+            Children = { heading, ActionSlot } };
+        Child = new StackPanel { Spacing = AppTheme.Space.M, Children = { header, ReviewError, body } };
     }
 }

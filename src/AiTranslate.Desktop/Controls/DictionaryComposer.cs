@@ -12,12 +12,16 @@ using Avalonia.VisualTree;
 
 namespace AiTranslate.Desktop.Controls;
 
+internal enum ComposerActivity { Ready, Translating, ReviewingBlock }
+
 internal sealed class DictionaryComposer : Grid
 {
+    private const string InputPrompt = "输入要翻译的单词、短语或段落…";
+    private readonly TextBlock _hint = TextStyles.Create(null, TextRole.Meta, wrap: false);
     private readonly TextBox _input = new()
     {
         Classes = { "chat-input" },
-        PlaceholderText = "输入要翻译的单词、短语或段落…",
+        PlaceholderText = InputPrompt,
         AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
         MinHeight = 48, MaxHeight = 168,
         FontSize = AppTheme.Type.BodyLarge, Foreground = AppTheme.TextPrimary,
@@ -79,33 +83,22 @@ internal sealed class DictionaryComposer : Grid
 
         void Send()
         {
-            if (string.IsNullOrWhiteSpace(_input.Text)) return;
+            if (!IsEffectivelyEnabled || string.IsNullOrWhiteSpace(_input.Text)) return;
             var query = _input.Text.Trim();
             _input.Clear();
             submit(query);
         }
 
-        var hint = new StackPanel
-        {
-            Orientation = Orientation.Horizontal, Spacing = AppTheme.Space.XXS, VerticalAlignment = VerticalAlignment.Center,
-            Children =
-            {
-                new TextBlock
-                {
-                    Text = "Enter 发送  ·  Shift + Enter 换行", FontSize = AppTheme.Type.Caption, Foreground = AppTheme.TextMuted,
-                    VerticalAlignment = VerticalAlignment.Center
-                }
-            }
-        };
-        _input.GotFocus += (_, _) => hint.Opacity = 1;
-        _input.LostFocus += (_, _) => hint.Opacity = 0.6;
-        hint.Opacity = 0.6;
+        _hint.VerticalAlignment = VerticalAlignment.Center;
+        _input.GotFocus += (_, _) => _hint.Opacity = 1;
+        _input.LostFocus += (_, _) => _hint.Opacity = 0.6;
+        _hint.Opacity = 0.6;
         var footer = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = AppTheme.Space.M,
-            Children = { _language, hint, _send }
+            Children = { _language, _hint, _send }
         };
-        Grid.SetColumn(hint, 1);
+        Grid.SetColumn(_hint, 1);
         Grid.SetColumn(_send, 2);
         var card = StudioUi.CreateBentoCard(new StackPanel
         {
@@ -113,7 +106,7 @@ internal sealed class DictionaryComposer : Grid
         }, padding: new Thickness(AppTheme.Space.L, AppTheme.Space.M, AppTheme.Space.M, AppTheme.Space.M));
         card.ClearValue(Border.BorderBrushProperty);
         card.BoxShadow = default;
-        SizeChanged += (_, e) => hint.IsVisible = e.NewSize.Width >= 640;
+        SizeChanged += (_, e) => _hint.IsVisible = e.NewSize.Width >= 640;
         card.Classes.Add("chat-composer");
         // Keep the shadow outside the rounded clip so it can fade into the page on every side.
         Children.Add(new Border { CornerRadius = card.CornerRadius, BoxShadow = AppTheme.CardShadow, IsHitTestVisible = false });
@@ -121,13 +114,16 @@ internal sealed class DictionaryComposer : Grid
         surface.SizeChanged += (_, e) => surface.Clip = new RectangleGeometry(new Rect(e.NewSize),
             card.CornerRadius.TopLeft, card.CornerRadius.TopLeft);
         Children.Add(surface);
-        SetGenerating(false);
+        SetActivity(ComposerActivity.Ready);
     }
 
-    public void SetGenerating(bool generating)
+    public void SetActivity(ComposerActivity activity)
     {
-        _generating = generating;
-        _flow.IsVisible = generating;
+        _generating = activity == ComposerActivity.Translating;
+        _flow.IsVisible = _generating;
+        IsEnabled = activity != ComposerActivity.ReviewingBlock;
+        _input.PlaceholderText = IsEnabled ? InputPrompt : "栏目复核中…";
+        _hint.Text = IsEnabled ? "Enter 发送  ·  Shift + Enter 换行" : "复核完成后可继续输入";
         UpdateAction();
     }
 

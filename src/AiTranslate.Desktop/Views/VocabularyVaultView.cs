@@ -1,3 +1,4 @@
+using AiTranslate.Ai;
 using AiTranslate.Core;
 using AiTranslate.Desktop.Controls;
 using AiTranslate.Speech;
@@ -14,6 +15,7 @@ namespace AiTranslate.Desktop.Views;
 public sealed partial class VocabularyVaultView : UserControl
 {
     private readonly IVocabularyService _service;
+    private readonly IAiDictionaryService? _dictionary;
     private readonly ISpeechSynthesisService _speech;
     private readonly AppSettingsStore _settings;
     private readonly Action<string, string?, TranslationTriggerSource, string, string> _lookup;
@@ -35,9 +37,10 @@ public sealed partial class VocabularyVaultView : UserControl
 
     public VocabularyVaultView(IVocabularyService vocabularyService, ISpeechSynthesisService speechService,
         AppSettingsStore settingsStore, Action<string, string?, TranslationTriggerSource, string, string> onLookupInStudio,
-        Action<string?> onCollect, Action<string> onSwitchToReview, Action<string> setStatus)
+        Action<string?> onCollect, Action<string> onSwitchToReview, Action<string> setStatus, IAiDictionaryService? dictionary = null)
     {
         _service = vocabularyService;
+        _dictionary = dictionary;
         _speech = speechService;
         _settings = settingsStore;
         _lookup = onLookupInStudio;

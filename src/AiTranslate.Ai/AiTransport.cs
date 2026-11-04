@@ -12,13 +12,22 @@ public sealed record AiCompletion(string Text, IReadOnlyList<AiToolCall> Calls, 
 public interface IAiTransport
 {
     Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token);
+    Task<AiCompletion> CompleteJsonAsync(IReadOnlyList<JsonObject> messages, Action<string> onText, CancellationToken token) =>
+        CompleteAsync(messages, [], onText, token);
 }
 
 public sealed class AiTransport(AiProviderConfig config, HttpClient? client = null) : IAiTransport, IDisposable
 {
     private readonly HttpClient _client = client ?? AiHttp.CreateClient();
 
-    public async Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
+    public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token) =>
+        SendAsync(messages, tools, onText, token, jsonOutput: false);
+
+    public Task<AiCompletion> CompleteJsonAsync(IReadOnlyList<JsonObject> messages, Action<string> onText, CancellationToken token) =>
+        SendAsync(messages, [], onText, token, jsonOutput: true);
+
+    private async Task<AiCompletion> SendAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText,
+        CancellationToken token, bool jsonOutput)
     {
         var provider = AiProviders.Resolve(config);
         var modelId = string.IsNullOrWhiteSpace(config.ModelId)
@@ -31,6 +40,10 @@ public sealed class AiTransport(AiProviderConfig config, HttpClient? client = nu
             ["messages"] = new JsonArray(messages.Select(m => (JsonNode)m.DeepClone()).ToArray()),
             ["stream"] = true
         };
+        // Compatible gateways vary in their support for response_format. Opt in only on
+        // the verified endpoint; the same application-level validation runs on every provider.
+        if (jsonOutput && new Uri(provider.BaseUrl).Host.Equals("api.deepseek.com", StringComparison.OrdinalIgnoreCase))
+            body["response_format"] = new JsonObject { ["type"] = "json_object" };
         if (tools.Count > 0)
         {
             body["tools"] = tools.DeepClone();

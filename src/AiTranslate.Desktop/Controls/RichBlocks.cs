@@ -14,6 +14,14 @@ internal static class RichBlocks
 {
     public enum CalloutTone { Neutral, Insight, Attention }
 
+    public static Border Annotation(string label, SelectableTextBlock text) => new()
+    {
+        Background = AppTheme.Hues.Sky.Soft,
+        CornerRadius = new CornerRadius(AppTheme.Radius.S),
+        Padding = new Thickness(AppTheme.Space.S, AppTheme.Space.XXS),
+        Child = StudioUi.CreateKeyValue(label, text, "AnnotationLabel", labelTop: 0)
+    };
+
     /// <summary>Bulleted or numbered list. Markers align with the first text line of each item.</summary>
     public static Control List(IEnumerable<Control> items, bool numbered = false)
     {
@@ -53,7 +61,7 @@ internal static class RichBlocks
     public static Control Table(string columns, IReadOnlyList<string> headers, IReadOnlyList<IReadOnlyList<Control>> rows,
         IReadOnlySet<int>? highlightedRows = null)
     {
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions(columns) };
+        var grid = new ReadingGrid(columns);
         var columnCount = grid.ColumnDefinitions.Count;
         var r = 0;
         if (headers.Count > 0)
@@ -92,7 +100,6 @@ internal static class RichBlocks
                     column == columnCount - 1 ? AppTheme.Space.M : AppTheme.Space.S, AppTheme.Space.S),
                 Child = content
             };
-            if (content is TextBlock text && grid.ColumnDefinitions[column].Width.IsAuto) text.MaxWidth = 200;
             Grid.SetRow(cell, row);
             Grid.SetColumn(cell, column);
             grid.Children.Add(cell);

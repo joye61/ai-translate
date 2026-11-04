@@ -255,7 +255,16 @@ public sealed partial class VocabularyService : IVocabularyService
                 {
                     DictionaryContext = result.LookupContext,
                     DictionaryRevision = result.CacheStamp?.Revision ?? current.DictionaryRevision,
+                    DictionaryCacheKey = result.CacheStamp?.Key ?? current.DictionaryCacheKey,
+                    ReaderLanguage = result.ReaderLanguage ?? current.ReaderLanguage,
+                    DictionaryContextMeaning = result.ContextMeaning ?? current.DictionaryContextMeaning,
+                    SuggestedTags = result.SuggestedTags,
+                    GlossaryReferences = result.GlossaryReferences,
+                    SourceReadingNote = result.SourceReadingNote,
+                    GlossaryUsageNote = result.GlossaryUsageNote,
+                    PronunciationTip = result.PronunciationTip,
                     Translation = translation,
+                    LiteralTranslation = result.LiteralTranslation,
                     TranslationDecisions = result.TranslationDecisions.Count == 0 && current.Translation == translation &&
                         current.TargetLanguage == result.TargetLanguage ? current.TranslationDecisions : result.TranslationDecisions,
                     UkPhonetic = string.IsNullOrWhiteSpace(result.UkPhonetic) ? current.UkPhonetic : result.UkPhonetic!,

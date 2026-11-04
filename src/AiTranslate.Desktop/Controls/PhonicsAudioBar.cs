@@ -1,3 +1,4 @@
+using AiTranslate.Core;
 using AiTranslate.Speech;
 using Avalonia;
 using Avalonia.Automation;
@@ -39,6 +40,10 @@ public static class PhonicsAudioBar
         AddPracticeButtons(wrap, speech, settings, headword, usIpa, ukIpa, exampleSentence, compact);
         return wrap;
     }
+
+    internal static bool HasEnglishAudio(DictionaryEntryResult entry) => !entry.ItemType.IsPassage() &&
+        (SourceAccent(entry.DetectedSourceLanguage) == SpeechAccent.AmericanEnglish ||
+        entry.DetectedSourceLanguage == "auto" && (!string.IsNullOrWhiteSpace(entry.UsPhonetic) || !string.IsNullOrWhiteSpace(entry.UkPhonetic)));
 
     internal static WrapPanel CreateAccentStrip(ISpeechSynthesisService speech, AppSettingsStore settings,
         string headword, string? usIpa, string? ukIpa, SpeechPlayback? usPlayback = null)

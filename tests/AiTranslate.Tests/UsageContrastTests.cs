@@ -17,13 +17,14 @@ public sealed class UsageContrastTests
               {"leftForm":" stop doing ","leftUse":"结束这个动作","rightForm":"stop to do","rightUse":"停下以便做另一件事"},
               {"leftForm":"stop to do","leftUse":"B","rightForm":"stop doing","rightUse":"A"},
               {"leftForm":"stop by","leftUse":"顺便拜访","rightForm":"stop over","rightUse":"旅途中短暂停留"},
-              {"leftForm":"stop for","leftUse":"A","rightForm":"stop at","rightUse":"B"}]}
+              {"leftForm":"stop for lunch","leftUse":"停下来吃饭，说明目的","rightForm":"stop at the café","rightUse":"在咖啡馆停留，说明地点"}]}
             """;
         var contrasts = AiDictionaryService.ParseDictionaryResponse("stop", "zh-Hans", json).UsageContrasts;
-        Assert.Equal(2, contrasts.Count);
+        Assert.Equal(3, contrasts.Count);
         Assert.Equal("stop doing", contrasts[0].LeftForm);
         Assert.Equal("停下以便做另一件事", contrasts[0].RightUse);
         Assert.Equal("stop over", contrasts[1].RightForm);
+        Assert.Equal("stop at the café", contrasts[2].RightForm);
         Assert.Empty(AiDictionaryService.ParseDictionaryResponse("We stopped.", "zh-Hans",
             json.Replace("\"Word\"", "\"Sentence\"")).UsageContrasts);
     }

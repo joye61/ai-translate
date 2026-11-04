@@ -55,6 +55,7 @@ public sealed partial class VocabularyService
             entries[index] = entry with
             {
                 NotebookId = notebookId, ItemType = type, Translation = translation, UserPersonalNote = note.Trim(),
+                LiteralTranslation = entry.Translation == translation ? entry.LiteralTranslation : "",
                 Tags = tags.ToArray(), UpdatedAt = DateTimeOffset.UtcNow,
                 TranslationDecisions = entry.Translation == translation ? entry.TranslationDecisions :
                     entry.TranslationDecisions.Where(d => d.IsAnchoredIn(entry.Headword, translation)).ToArray()

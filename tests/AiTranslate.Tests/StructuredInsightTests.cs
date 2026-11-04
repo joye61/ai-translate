@@ -38,26 +38,47 @@ public sealed class StructuredInsightTests
         foreach (var type in Enum.GetValues<VocabularyItemType>())
         {
             var specs = EntryBlockCatalog.For(type);
+            Assert.Equal(EntryBlockCatalog.LiteralTranslation, specs[0]);
             Assert.Equal(specs.Count, specs.Select(s => s.Block).Distinct().Count());
             Assert.Equal(specs.Count, specs.Select(s => s.Title).Distinct().Count());
+            var blocks = specs.Select(s => s.Block).ToArray();
+            if (blocks.Contains(EntryBlock.Variants))
+                Assert.Equal([EntryBlock.Variants, EntryBlock.TranslationOptions],
+                    blocks.Where(b => b is EntryBlock.Variants or EntryBlock.TranslationOptions));
             if (type.IsPassage())
             {
+                Assert.Equal(EntryBlock.Source, specs[1].Block);
                 Assert.Equal(EntryBlockTier.Core, specs.Single(s => s.Block == EntryBlock.Source).Tier);
                 Assert.DoesNotContain(specs, s => s.Block is EntryBlock.Senses or EntryBlock.Inflections or EntryBlock.WordFormation or EntryBlock.Mistakes);
             }
             else
             {
-                Assert.Equal(EntryBlock.TranslationOptions, specs[0].Block);
                 Assert.Equal(EntryBlock.Senses, specs[1].Block);
                 Assert.Equal(EntryBlockTier.Core, specs[1].Tier);
+                Assert.Contains(EntryBlock.TranslationOptions, blocks);
                 Assert.DoesNotContain(specs, s => s.Block is EntryBlock.Source or EntryBlock.Decisions or EntryBlock.Structure or EntryBlock.Tone);
             }
         }
         var paragraph = EntryBlockCatalog.For(VocabularyItemType.Paragraph).Select(s => s.Block).ToList();
-        Assert.True(paragraph.IndexOf(EntryBlock.KeyPoints) < paragraph.IndexOf(EntryBlock.Source));
+        Assert.Equal([EntryBlock.LiteralTranslation, EntryBlock.Source, EntryBlock.Alignment], paragraph.Take(3));
         Assert.Contains(EntryBlock.Structure, EntryBlockCatalog.For(VocabularyItemType.Sentence).Select(s => s.Block));
         Assert.Contains(EntryBlock.LiteralMeaning, EntryBlockCatalog.For(VocabularyItemType.Idiom).Select(s => s.Block));
         Assert.DoesNotContain(EntryBlock.LiteralMeaning, EntryBlockCatalog.For(VocabularyItemType.Word).Select(s => s.Block));
+    }
+
+    [Fact]
+    public void LiteralCounterpartIsOptionalForEveryItemType()
+    {
+        foreach (var type in Enum.GetValues<VocabularyItemType>())
+        {
+            DictionaryEntryResult Parse(string field) => AiDictionaryService.ParseDictionaryResponse("sample", "zh-Hans",
+                $$"""{"primaryTranslation":"今天就到这儿吧。","itemType":"{{type}}"{{field}}}""");
+            Assert.Equal("", Parse("").LiteralTranslation);
+            Assert.Equal("", Parse(""","literalTranslation":" 今天就到这儿吧！ " """).LiteralTranslation);
+            var entry = Parse(""","literalTranslation":"我们把这称作一天吧。","variants":[{"style":"直译","text":"我们把这称作一天吧"}]""");
+            Assert.Equal("我们把这称作一天吧。", entry.LiteralTranslation);
+            Assert.Empty(entry.Variants);
+        }
     }
 
     [Fact]
@@ -123,7 +144,7 @@ public sealed class StructuredInsightTests
         var result = new DictionaryEntryResult
         {
             SourceText = "break the ice", PrimaryTranslation = "打破僵局", ItemType = VocabularyItemType.Idiom,
-            LiteralMeaning = "打破冰面", CulturalNote = "源自破冰船为船队开路。", Variants = [new("口语", "活跃气氛")],
+            LiteralMeaning = "破开冰层", LiteralTranslation = "打破冰面", CulturalNote = "源自破冰船为船队开路。", Variants = [new("口语", "活跃气氛")],
             TranslationOptions = [new("打破僵局", "break a deadlock", "Emphasizes the impasse.")],
             SynonymNuances = [new("break the ice", "开场缓和"), new("warm up", "预热")],
             Mistakes = [new("break an ice", "break the ice", "固定搭配用 the")], Tone = new(2, ["轻松"])
@@ -133,8 +154,13 @@ public sealed class StructuredInsightTests
         {
             var path = Path.Combine(directory.FullName, "words.json");
             new VocabularyService(path).AddOrUpdateFromDictionary(result);
-            var saved = new VocabularyService(path).FindByHeadword("break the ice")!;
+            var reopened = new VocabularyService(path);
+            var saved = reopened.FindByHeadword("break the ice")!;
             var projected = saved.ToDictionaryResult();
+            Assert.Equal(result.LiteralTranslation, projected.LiteralTranslation);
+            Assert.Contains(result.LiteralTranslation, reopened.ExportToMarkdown());
+            Assert.Contains(result.LiteralTranslation, reopened.ExportToCsv());
+            Assert.Contains(result.LiteralTranslation, reopened.ExportToAnkiTsv());
             Assert.Equal(result.LiteralMeaning, projected.LiteralMeaning);
             Assert.Equal(result.CulturalNote, projected.CulturalNote);
             Assert.Equal(result.Variants, projected.Variants);
@@ -168,8 +194,9 @@ public sealed class StructuredInsightTests
                 {
                     var word = new DictionaryEntryResult
                     {
-                        SourceText = "inspection", PrimaryTranslation = "检查", DetectedSourceLanguage = "en",
+                        SourceText = "inspection", PrimaryTranslation = "检查；视察", DetectedSourceLanguage = "en",
                         Senses = [new("n.", "检查")],
+                        TranslationOptions = [new("检查", "检验状况", "核对标准时使用"), new("视察", "实地察看", "强调现场考察")],
                         Morphemes = [new("in-", "向内", MorphemeKind.Prefix), new("spect", "看", MorphemeKind.Root)],
                         EtymologyAndRoot = "源自拉丁语 **inspicere**",
                         SynonymNuances = [new("inspection", "按标准查看"), new("examination", "深入检查", "中性")],
@@ -177,16 +204,20 @@ public sealed class StructuredInsightTests
                         Mistakes = [new("inspection to", "inspection of", "介词用 `of`")],
                         MemoryMnemonic = "in 向里 + spect 看"
                     };
-                    details.ShowEntry(word, complete: false);
+                    details.ShowEntry(word with { Senses = [] }, complete: false);
                     window.UpdateLayout();
+                    Assert.DoesNotContain(Texts(), t => t.Text == "词性与释义");
+                    Assert.Contains(Texts(), t => t.Text == "译法辨析");
                     var tile = Texts().Single(t => t.Text == "spect");
                     details.ShowEntry(word with { Collocations = [new("carry out an inspection", "进行检查")] }, complete: false);
                     window.UpdateLayout();
                     Assert.Same(tile, Texts().Single(t => t.Text == "spect"));
+                    Assert.Equal(["词性与释义", "译法辨析"], Texts().Select(t => t.Text).Where(t => t is "词性与释义" or "译法辨析"));
 
                     details.ShowEntry(word, complete: true);
                     window.UpdateLayout();
                     var texts = Texts().Select(t => t.Text ?? t.Inlines?.Text ?? "").ToArray();
+                    Assert.Equal(["词性与释义", "译法辨析"], texts.Where(t => t is "词性与释义" or "译法辨析"));
                     Assert.Contains("构词与词源", texts);
                     Assert.Contains("近义词辨析", texts);
                     Assert.Contains("常见错误", texts);
@@ -206,17 +237,24 @@ public sealed class StructuredInsightTests
 
                     var paragraph = new DictionaryEntryResult
                     {
-                        SourceText = "Prices rose. Demand fell.", PrimaryTranslation = "价格上涨。需求下降。", ItemType = VocabularyItemType.Paragraph,
+                        SourceText = "Prices rose.\n\nDemand fell. Shops closed.", PrimaryTranslation = "价格上涨。\n\n需求下降。商店关门。", ItemType = VocabularyItemType.Paragraph,
                         KeyPoints = ["价格与需求背离"],
                         Alignment = [new("Prices rose.", "价格上涨。"), new("Demand fell.", "需求下降。")],
                         Tone = new(3, ["客观"], "新闻语体")
                     };
+                    details.ShowEntry(paragraph with { Alignment = [] }, complete: false);
+                    window.UpdateLayout();
+                    var original = Assert.Single(Texts(), t => t.Text == paragraph.SourceText);
+                    Assert.DoesNotContain(Texts(), t => t.Text == "逐句对照");
+                    details.ShowEntry(paragraph, complete: false);
+                    window.UpdateLayout();
+                    Assert.Same(original, Assert.Single(Texts(), t => t.Text == paragraph.SourceText));
                     details.ShowEntry(paragraph, complete: true);
                     window.UpdateLayout();
                     texts = Texts().Select(t => t.Text ?? t.Inlines?.Text ?? "").ToArray();
-                    Assert.True(Array.IndexOf(texts, "要点速览") < Array.IndexOf(texts, "原文对照"));
-                    // "原文" survives only as the table's column header; the section itself is titled 原文对照.
-                    Assert.Single(texts, t => t == "原文");
+                    Assert.Single(texts, t => t == paragraph.SourceText);
+                    Assert.Equal(["完整原文", paragraph.SourceText, "逐句对照", "要点速览"],
+                        texts.Where(t => t == paragraph.SourceText || t is "完整原文" or "逐句对照" or "要点速览"));
                     Assert.Contains("Demand fell.", texts);
                     Assert.Contains("需求下降。", texts);
                     Assert.Contains("语气与语域", texts);

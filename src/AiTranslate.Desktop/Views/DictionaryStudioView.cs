@@ -132,7 +132,7 @@ public sealed class DictionaryStudioView : UserControl
         using var request = new CancellationTokenSource();
         _lookup = request;
         var page = BeginResult(query, language, contextSentence);
-        _composer.SetGenerating(true);
+        _composer.SetActivity(ComposerActivity.Translating);
         _setStatus("正在翻译…");
         try
         {
@@ -171,7 +171,7 @@ public sealed class DictionaryStudioView : UserControl
             if (_lookup == request)
             {
                 _lookup = null;
-                _composer.SetGenerating(false);
+                _composer.SetActivity(ComposerActivity.Ready);
             }
         }
     }
@@ -180,16 +180,17 @@ public sealed class DictionaryStudioView : UserControl
     {
         StopLookup();
         _history.Clear();
-        FinishResult(BeginResult(result.SourceText, result.TargetLanguage), result, null, source, sourceTitle);
+        var context = string.IsNullOrWhiteSpace(result.LookupContext) ? null : result.LookupContext;
+        FinishResult(BeginResult(result.SourceText, result.TargetLanguage, context), result, context, source, sourceTitle);
     }
 
     internal void StopLookup()
     {
         if (_lookup is not { } request) return;
         _lookup = null;
-        (_scroll.Content as DictionaryResultView)?.MarkStopped();
-        _composer.SetGenerating(false);
-        _setStatus("已停止生成");
+        if (_current is null) (_scroll.Content as DictionaryResultView)?.MarkStopped();
+        _composer.SetActivity(ComposerActivity.Ready);
+        _setStatus(_current is null ? "已停止生成" : "已取消本次请求");
         request.Cancel();
     }
 
@@ -199,9 +200,15 @@ public sealed class DictionaryStudioView : UserControl
         _welcome.IsVisible = false;
         _current = null;
         _collection = null;
-        var page = new DictionaryResultView(query, language, _speech, _settings, LookupRelated, _history.Count > 0 ? GoBack : null, context, disclosures)
+        var page = new DictionaryResultView(query, language, _speech, _settings, LookupRelated, _history.Count > 0 ? GoBack : null,
+            context, disclosures)
         {
             MaxWidth = ReadingWidth
+        };
+        page.BlockReviews.Requested += block =>
+        {
+            if (_current is { } current && ReferenceEquals(_scroll.Content, page))
+                _ = SupplementAsync(page, current, block);
         };
         _scroll.Content = page;
         _scroll.ScrollToHome();
@@ -279,69 +286,65 @@ public sealed class DictionaryStudioView : UserControl
         if (!result.ItemType.IsPassage())
         {
             var reading = _current;
-            var check = StudioUi.CreateCompactButton("sparkles", result.ItemType.IsWordOrTerm() ? "补查词形与用法" : "补查常用义与短语",
-                () => _ = SupplementAsync(page, reading, examplesOnly: false));
-            ToolTip.SetTip(check, "补查词形在什么情境下使用，以及相关词、常用义和固定表达");
-            extras.Children.Add(check);
             var missing = result.MissingUsageExamples().Count();
             if (missing > 0)
             {
                 var fill = StudioUi.CreateCompactButton("format-quote-close", $"补全例句 · {missing}",
-                    () => _ = SupplementAsync(page, reading, examplesOnly: true));
+                    () => _ = SupplementAsync(page, reading));
                 ToolTip.SetTip(fill, "只为缺双语例句的句型和搭配补例句，每次最多八处");
                 extras.Children.Add(fill);
             }
         }
         page.ShowActions(tools, extras);
-        _setStatus("翻译完成");
+        _setStatus(result.NotebookSyncPending ? BlockReviewActions.PendingSyncStatus : "翻译完成");
         if (pronounce && _settings.Current.AutoPronounceOnLookup && accent is { } autoVoice)
             _ = _speech.SpeakAsync(result.SourceText, autoVoice, result.UsPhonetic, _settings.Current.SpeechSpeed,
                 autoVoice == SpeechAccent.AmericanEnglish ? _settings.Current.PreferredUsVoiceId : null, playback: page.SourcePlayback);
     }
 
-    private async Task SupplementAsync(DictionaryResultView page, Reading reading, bool examplesOnly)
+    private async Task SupplementAsync(DictionaryResultView page, Reading reading, EntryBlock? block = null)
     {
         if (_lookup is not null || !ReferenceEquals(_current, reading)) return;
         using var request = new CancellationTokenSource();
         _lookup = request;
-        _composer.SetGenerating(true);
-        var progress = examplesOnly ? "正在补全双语例句…" : "正在补查词条用法…";
-        _setStatus(progress);
+        _composer.SetActivity(block is null ? ComposerActivity.Translating : ComposerActivity.ReviewingBlock);
+        var title = EntryBlockCatalog.For(reading.Entry.ItemType).FirstOrDefault(s => s.Block == block)?.Title;
+        if (block is null) page.BlockReviews.SetBusy(true);
+        _setStatus(block is null ? "正在补全双语例句…" : $"AI 正在复核「{title}」…");
         try
         {
-            var result = examplesOnly
-                ? await _dictionaryService.CompleteExamplesAsync(reading.Entry, reading.Context, request.Token)
-                : await _dictionaryService.CheckLexicalCoverageAsync(reading.Entry, reading.Context, request.Token);
+            var result = block is { } target
+                ? await page.BlockReviews.ReviewAsync(_dictionaryService, reading.Entry, target, request.Token)
+                : await _dictionaryService.CompleteExamplesAsync(reading.Entry, reading.Context, request.Token);
             if (_lookup != request) return;
             if (ReferenceEquals(result, reading.Entry))
             {
-                _setStatus("本轮补查未发现可新增的内容");
+                _setStatus(block is null ? "本轮未发现可补充的例句" : BlockReviewActions.ResultStatus(title!, result, changed: false));
                 return;
             }
             var offset = _scroll.Offset;
-            var updatedPage = BeginResult(result.SourceText, result.TargetLanguage, reading.Context, reading.Disclosures);
-            FinishResult(updatedPage, result, reading.Context, reading.Source, reading.Title, pronounce: false);
+            FinishResult(page, result, reading.Context, reading.Source, reading.Title, pronounce: false);
             _scroll.UpdateLayout();
             _scroll.Offset = offset;
-            _setStatus(examplesOnly
-                ? $"已补全 {reading.Entry.MissingUsageExamples().Count() - result.MissingUsageExamples().Count()} 处双语例句"
-                : "词条用法已补充");
+            _setStatus(block is not null ? BlockReviewActions.ResultStatus(title!, result, changed: true) :
+                result.NotebookSyncPending ? BlockReviewActions.PendingSyncStatus :
+                $"已补全 {reading.Entry.MissingUsageExamples().Count() - result.MissingUsageExamples().Count()} 处双语例句");
         }
         catch (OperationCanceledException) when (request.IsCancellationRequested) { }
         catch (Exception ex)
         {
             if (_lookup == request)
             {
-                page.ShowError($"补充失败：{ex.Message}");
-                _setStatus("已保留原词条，可重试");
+                _setStatus($"未能完成{(block is null ? "例句补全" : $"「{title}」复核")}。{ex.Message}");
             }
         }
         finally
         {
+            if (block is null) page.BlockReviews.SetBusy(false);
             if (_lookup == request)
             {
                 _lookup = null;
-                _composer.SetGenerating(false);
+                _composer.SetActivity(ComposerActivity.Ready);
             }
         }
     }

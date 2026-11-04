@@ -73,49 +73,40 @@ internal sealed partial class DictionaryDetails
 
     private static Control CreateUsageCases(PartOfSpeechSense sense)
     {
-        var table = new StackPanel { Spacing = AppTheme.Space.XS, Margin = new Thickness(0, AppTheme.Space.XS, 0, 0) };
-        Grid.SetIsSharedSizeScope(table, true);
-        var lines = sense.UsageCases.Select(usage =>
+        var table = new ReadingGrid("Auto,Auto,*,*")
+        {
+            Margin = new Thickness(0, AppTheme.Space.XS, 0, 0), RowSpacing = AppTheme.Space.XS
+        };
+        foreach (var usage in sense.UsageCases)
         {
             var grammar = usage.Grammar == sense.GrammarLabel || usage.Grammar == usage.Condition ? "" : usage.Grammar;
             var meaning = usage.Meaning == sense.DefinitionZh || usage.Meaning == usage.Condition ? "" : usage.Meaning;
-            return usage with { Grammar = grammar, Meaning = meaning };
-        }).ToArray();
-        // Short labels share just enough width to align the expressions. Long explanations
-        // flow alongside the expression rather than consuming an entire column on narrow windows.
-        var alignGrammar = lines.Length > 1 && lines.Any(c => c.Grammar.Length > 0) && lines.All(c => c.Grammar.Length <= 10);
-        foreach (var line in lines)
-            table.Children.Add(CreateUsageLine(line.Condition, line.Grammar, line.Expression, line.Meaning, alignGrammar));
+            AddUsageLine(table, usage.Condition, grammar, usage.Expression, meaning);
+        }
         return table;
     }
 
-    private static Control CreateUsageLine(string condition, string grammar, string expression, string meaning, bool alignGrammar = false)
+    private static Control CreateUsageLine(string condition, string expression, string meaning)
     {
-        var content = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.XXS };
-        if (!alignGrammar && !string.IsNullOrWhiteSpace(grammar))
-            content.Children.Add(TextStyles.Create(grammar, TextRole.FieldLabel));
-        if (!string.IsNullOrWhiteSpace(expression))
-            content.Children.Add(TextStyles.Selectable(expression, TextRole.Term));
-        if (!string.IsNullOrWhiteSpace(meaning))
-            content.Children.Add(TextStyles.Selectable(meaning, TextRole.Secondary));
-        foreach (var element in content.Children) element.VerticalAlignment = VerticalAlignment.Center;
-        if (alignGrammar)
+        var table = new ReadingGrid("Auto,Auto,*,*");
+        AddUsageLine(table, condition, "", expression, meaning);
+        return table;
+    }
+
+    private static void AddUsageLine(ReadingGrid table, string condition, string grammar, string expression, string meaning)
+    {
+        var row = table.RowDefinitions.Count;
+        table.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+        if (condition.Length > 0) Add(TextStyles.Create(condition, TextRole.Label), 0);
+        if (grammar.Length > 0) Add(TextStyles.Create(grammar, TextRole.FieldLabel), 1);
+        if (expression.Length > 0) Add(TextStyles.Selectable(expression, TextRole.Term), 2);
+        if (meaning.Length > 0) Add(TextStyles.Selectable(meaning, TextRole.ExampleTarget), 3);
+
+        void Add(Control text, int column)
         {
-            var label = TextStyles.Create(grammar, TextRole.FieldLabel);
-            // With a wrapped expression the grammatical label belongs on the first line.
-            label.VerticalAlignment = VerticalAlignment.Top;
-            Grid.SetColumn(content, 1);
-            var pair = new Grid
-            {
-                ColumnDefinitions =
-                {
-                    new ColumnDefinition(GridLength.Auto) { SharedSizeGroup = "UsageCaseGrammar" },
-                    new ColumnDefinition(GridLength.Star)
-                },
-                ColumnSpacing = AppTheme.Space.S, Children = { label, content }
-            };
-            return StudioUi.CreateKeyValue(condition, pair, "UsageCaseCondition", labelTop: 0);
+            text.VerticalAlignment = VerticalAlignment.Top;
+            if (column < 3) text.Margin = new Thickness(0, 0, AppTheme.Space.S, 0);
+            table.AddCell(text, row, column);
         }
-        return StudioUi.CreateKeyValue(condition, content, "UsageCaseCondition", labelTop: 0);
     }
 }

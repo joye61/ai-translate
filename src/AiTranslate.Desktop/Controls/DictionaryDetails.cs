@@ -13,12 +13,12 @@ using Avalonia.Threading;
 namespace AiTranslate.Desktop.Controls;
 
 internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, AppSettingsStore settings, Action<string, string, bool> lookup,
-    Action<SentenceCloze> practice, DictionaryDisclosures? disclosures = null) : StackPanel
+    Action<SentenceCloze>? practice = null, DictionaryDisclosures? disclosures = null, BlockReviewActions? reviews = null) : StackPanel
 {
     private sealed record Row(string Label, string Text, string? Note = null, BilingualExample? Example = null, bool Link = false,
         UsageContrast? Contrast = null, PartOfSpeechSense? Sense = null, int Number = 0, bool Chips = false, SenseHeading? Heading = null,
-        WordInflection? SenseForm = null);
-    private enum Layout { Columns, Stacked, Forms, Senses, Collocations }
+        WordInflection? SenseForm = null, string? UsageNote = null);
+    private enum Layout { Columns, Stacked, Forms, Senses }
     private readonly DictionaryDisclosures _disclosures = disclosures ?? new();
     private const string ChipSeparator = "  ·  ";
     private sealed class SectionState
@@ -53,10 +53,16 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
             _sections.Clear();
             _type = entry.ItemType;
         }
+        RenderBlocks(entry, EntryBlockCatalog.For(entry.ItemType));
+    }
+
+    private void RenderBlocks(DictionaryEntryResult entry, IReadOnlyList<EntryBlockSpec> blocks)
+    {
+        var complete = _finished is not null;
         var pairs = entry.Collocations.Select((c, i) => new Row(c.Phrase, c.Meaning, c.SenseHint,
-            complete ? entry.GetCollocationExample(c) : c.Example, Link: true, Number: i + 1)).ToArray();
+            complete ? entry.GetCollocationExample(c) : c.Example, Link: true, Number: i + 1, UsageNote: c.UsageNote)).ToArray();
         var senses = SenseRows(entry, complete, out var remainingForms);
-        foreach (var spec in EntryBlockCatalog.For(entry.ItemType)) Render(spec, entry, pairs, senses, remainingForms);
+        foreach (var spec in blocks) Render(spec, entry, pairs, senses, remainingForms);
     }
 
     private void Render(EntryBlockSpec spec, DictionaryEntryResult entry, Row[] pairs, Row[] senses, IEnumerable<WordInflection> remainingForms)
@@ -64,23 +70,37 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
         var passage = entry.ItemType.IsPassage();
         switch (spec.Block)
         {
+            case EntryBlock.LiteralTranslation:
+                // DictionaryTranslations presents both readings together above the details.
+                break;
             case EntryBlock.Source:
-                var aligned = entry.ItemType == VocabularyItemType.Paragraph && entry.Alignment.Count > 0;
-                object source = _finished is null ? new { entry.SourceText, entry.Alignment }
-                    : new { entry.SourceText, entry.Alignment, entry.Collocations, entry.GlossaryReferences, entry.GrammarHighlights };
-                Custom(spec with { Title = aligned ? "原文对照" : spec.Title }, source,
-                    () => aligned ? DictionaryInsightBlocks.Alignment(entry.Alignment, SourceText) : SourceText(entry.SourceText));
+                Custom(spec, new { entry.SourceText, SourceAnnotations, entry.SourceReadingNote },
+                    () => WithNote(SourceText(entry.SourceText), entry.SourceReadingNote));
+                break;
+            case EntryBlock.PronunciationPractice:
+                Custom(spec, new { entry.SourceText, entry.UsPhonetic, entry.UkPhonetic, entry.PronunciationTip,
+                    Example = entry.Examples.FirstOrDefault()?.SourceSentence }, () =>
+                {
+                    if (_finished is null || !PhonicsAudioBar.HasEnglishAudio(entry)) return null;
+                    var practice = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S };
+                    PhonicsAudioBar.AddPracticeButtons(practice, speech, settings, entry.SourceText, entry.UsPhonetic,
+                        entry.UkPhonetic, entry.Examples.FirstOrDefault()?.SourceSentence);
+                    return WithNote(practice, entry.PronunciationTip);
+                });
+                break;
+            case EntryBlock.Alignment:
+                Custom(spec, new { entry.Alignment, SourceAnnotations }, () => DictionaryInsightBlocks.Alignment(entry.Alignment, SourceText));
                 break;
             case EntryBlock.KeyPoints:
                 Custom(spec, entry.KeyPoints, () => DictionaryInsightBlocks.KeyPoints(entry.KeyPoints));
                 break;
             case EntryBlock.Variants:
                 Custom(spec, entry.Variants, () => DictionaryInsightBlocks.Variants(entry.Variants, passage,
-                    _finished is null ? null : Copy, _finished is null ? null : LookupTranslation));
+                    _finished is null ? null : Copy, _finished is null ? null : LookupTargetText));
                 break;
             case EntryBlock.TranslationOptions:
-                Custom(spec, entry.TranslationOptions, () => DictionaryInsightBlocks.Options(entry.TranslationOptions,
-                    _finished is null ? null : LookupTranslation));
+                Custom(spec, entry.TranslationOptions, () => DictionaryInsightBlocks.Options(entry.TranslationOptions, passage,
+                    _finished is null ? null : LookupTargetText));
                 break;
             case EntryBlock.Decisions:
                 Custom(spec, entry.TranslationDecisions, () => DictionaryInsightBlocks.Decisions(entry.TranslationDecisions,
@@ -108,11 +128,13 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 Section(spec with { Title = title }, remainingForms.Select(i => new Row(i.Label, i.Value)), Layout.Forms);
                 break;
             case EntryBlock.Collocations:
-                Section(spec, pairs, Layout.Collocations, unit: passage ? null : "条");
+                ShowCollocations(spec, pairs, passage);
                 break;
             case EntryBlock.Examples:
                 var attached = pairs.Select(p => p.Example?.SourceSentence).Concat(senses.Select(row => row.Example?.SourceSentence))
                     .OfType<string>().ToHashSet(StringComparer.Ordinal);
+                if (EntryBlockCatalog.Applies(entry.ItemType, EntryBlock.WordFamily))
+                    attached.UnionWith(entry.WordFamily.Select(f => f.Example?.SourceSentence).OfType<string>());
                 var extra = entry.Examples.Where(e => !attached.Contains(e.SourceSentence)).ToArray();
                 // Sense hints label the examples when present; otherwise they share the ordinal badge used by every numbered list.
                 var hinted = extra.Any(e => !string.IsNullOrWhiteSpace(e.SenseHint));
@@ -165,20 +187,37 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 Section(spec, entry.SuggestedTags.Count == 0 ? [] : [new Row("", string.Join(ChipSeparator, entry.SuggestedTags), Chips: true)]);
                 break;
             case EntryBlock.Glossary:
-                Section(spec, entry.GlossaryReferences.Select(t => new Row(t.Phrase, t.Meaning, Link: true)), Layout.Stacked);
+                var terms = entry.GlossaryReferences.Select(t => new Row(t.Phrase, t.Meaning, Link: true)).ToArray();
+                Custom(spec, new { terms, entry.GlossaryUsageNote }, () =>
+                {
+                    if (terms.Length == 0) return null;
+                    var list = new StackPanel { Spacing = AppTheme.Space.M };
+                    foreach (var term in terms) list.Children.Add(CreateRow(term, Layout.Stacked, true));
+                    return WithNote(list, entry.GlossaryUsageNote);
+                });
                 break;
         }
     }
 
+    private static Control WithNote(Control content, string note)
+    {
+        if (string.IsNullOrWhiteSpace(note)) return content;
+        return new StackPanel { Spacing = AppTheme.Space.S, Children = { content,
+            RichBlocks.Callout("sparkles", RichText.Create(note, TextRole.Secondary), RichBlocks.CalloutTone.Insight) } };
+    }
+
+    private object? SourceAnnotations => _finished is { } entry
+        ? new { entry.Collocations, entry.GlossaryReferences, entry.GrammarHighlights } : null;
+
     private SelectableTextBlock SourceText(string text) => _finished is { } entry
-        ? TextStyles.Apply(new DictionaryReadingText(text, (q, context) => lookup(q, context, false),
-            entry.Collocations.Select(c => c.Phrase).Concat(entry.GlossaryReferences.Select(c => c.Phrase)), entry.GrammarHighlights),
-            TextRole.PassageTranslation)
+        ? DictionaryReadingText.Passage(text, (q, context) => lookup(q, context, false),
+            entry.Collocations.Select(c => c.Phrase).Concat(entry.GlossaryReferences.Select(c => c.Phrase)), entry.GrammarHighlights)
         : TextStyles.Selectable(text, TextRole.PassageTranslation);
 
     private void Copy(string text) => _ = TopLevel.GetTopLevel(this)?.Clipboard?.SetTextAsync(text);
 
-    private void LookupTranslation(string text) => lookup(text, "", true);
+    private void LookupTargetText(string text, string context) => lookup(text, context, true);
+    private void LookupTranslation(string text) => LookupTargetText(text, "");
 
     private static IEnumerable<(string Label, string Value)> SenseFields(PartOfSpeechSense sense) =>
         new[] { ("场景", sense.Scenario), ("用法", sense.GrammarPattern) }.Where(f => !string.IsNullOrWhiteSpace(f.Item2) &&
@@ -199,6 +238,14 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
             Children.Add(section.Host);
         }
         section.Section!.Title = spec.Title;
+        if (_finished is not null && reviews is not null && section.Section.ActionSlot.Content is null)
+            section.Section.ActionSlot.Content = reviews.Create(spec, section.Section.ReviewError, draft =>
+            {
+                RenderBlocks(draft, [spec]);
+                // A provisional form or a partially matched example may not yet have a row.
+                // Keep the review header and any error in this section until the final result.
+                section.Host.IsVisible = true;
+            });
         return section;
     }
 
@@ -207,7 +254,11 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
     {
         var section = Ensure(spec);
         var signature = JsonSerializer.Serialize(data) + (_finished is null ? "" : "|done");
-        if (section.Signature == signature) return;
+        if (section.Signature == signature)
+        {
+            section.Host.IsVisible = section.Body.Content is not null;
+            return;
+        }
         section.Signature = signature;
         var content = build();
         section.Body.Content = content;
@@ -220,18 +271,18 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
         var section = Ensure(spec);
         var rows = values.ToArray();
         var interactive = _finished is not null && rows.Any(r => r.Link || r.Example is not null);
-        if (section.Items is not null && section.Rows.SequenceEqual(rows) && section.Interactive == interactive) return;
         section.Host.IsVisible = rows.Length > 0;
+        if (section.Items is not null && section.Rows.SequenceEqual(rows) && section.Interactive == interactive) return;
         if (section.Items is null)
         {
             section.Items = layout switch
             {
                 Layout.Forms => new WrapPanel { ItemSpacing = AppTheme.Space.XXL, LineSpacing = AppTheme.Space.S },
-                Layout.Senses or Layout.Collocations => new StackPanel(),
+                Layout.Senses => new StackPanel(),
                 _ => new StackPanel { Spacing = layout == Layout.Stacked ? AppTheme.Space.M + 2 : AppTheme.Space.L }
             };
             Grid.SetIsSharedSizeScope(section.Items, true);
-            section.Body.Content = layout is Layout.Senses or Layout.Collocations
+            section.Body.Content = layout == Layout.Senses
                 ? RichBlocks.TableFrame(section.Items) : section.Items;
         }
         var counter = section.Section!.Caption;
@@ -245,7 +296,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
             if (section.Interactive == interactive && section.HasLabels == hasLabels &&
                 i < section.Rows.Length && section.Rows[i] == rows[i]) continue;
             var control = CreateRow(rows[i], layout, hasLabels);
-            if (layout is Layout.Senses or Layout.Collocations)
+            if (layout == Layout.Senses)
             {
                 var band = rows[i].Heading is not null;
                 control = new Border
@@ -267,17 +318,23 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
 
     private Control CreateRow(Row row, Layout layout, bool hasLabels)
     {
-        if (layout == Layout.Collocations) return CreateCollocation(row);
         if (row.Contrast is { } contrast) return UsageContrastView.Create(contrast);
         if (row.Heading is { } heading) return CreateSenseHeading(heading);
         if (row.Sense is { } sense) return CreateSenseRow(row, sense);
-        if (layout == Layout.Senses) return CreateUsageLine(row.Label, "", row.Note ?? "", row.Text);
+        if (layout == Layout.Senses)
+        {
+            var usage = CreateUsageLine(row.Label, row.Note ?? "", row.Text);
+            if (row.Example is not { } relatedExample) return usage;
+            var details = new StackPanel { Spacing = AppTheme.Space.S, Children = { usage } };
+            AddExample(details, relatedExample);
+            return details;
+        }
         if (layout == Layout.Forms) return CreateForm(row.Label, row.Text);
         if (row.Chips) return hasLabels ? StudioUi.CreateKeyValue(row.Label, CreateChips(row), "RowLabel", labelTop: row.Link ? 5 : 2) : CreateChips(row);
         if (row.Number > 0 && row.Example is { } numbered && string.IsNullOrEmpty(row.Label))
         {
             var tile = new StackPanel();
-            AddExample(tile, numbered, null);
+            AddExample(tile, numbered);
             var ordinal = StudioUi.CreateOrdinal(row.Number);
             // Centre the 22px badge on the tile's first 22px text line (tile padding top = Space.S).
             ordinal.Margin = new Thickness(0, AppTheme.Space.S, AppTheme.Space.M, 0);

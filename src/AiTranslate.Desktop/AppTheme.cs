@@ -153,7 +153,9 @@ public static class AppTheme
     // Text
     public static IBrush TextPrimary { get; } = Frozen(0xFF26211C);
     public static IBrush TextSecondary { get; } = Frozen(0xFF5E564D);
-    public static IBrush TextMuted { get; } = Frozen(0xFF8F867C);
+    public static IBrush TextMuted { get; } = Frozen(0xFF73695F);
+    public static IBrush AnnotationInk { get; } = Frozen(0xFF4B6077);
+    public static IBrush PairedTranslationInk { get; } = Frozen(0xFF305F59);
 
     /// <summary>Hairline-soft elevation for cards: a tight contact shadow plus a wide, faint ambient one.</summary>
     public static BoxShadows CardShadow { get; } = BoxShadows.Parse("0 1 2 0 #0A28211A, 0 8 24 -8 #1228211A");

@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Panlingo.LanguageIdentification.FastText" Version="0.8.1" />
     <ProjectReference Include="../AiTranslate.Core/AiTranslate.Core.csproj" />
+    <EmbeddedResource Include="Lexicon/english-lexical-hints.json.gz" />
+    <Content Include="Lexicon/WordNet-LICENSE.txt" Link="licenses/WordNet-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

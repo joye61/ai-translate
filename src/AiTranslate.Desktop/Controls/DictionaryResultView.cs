@@ -25,11 +25,11 @@ internal sealed class DictionaryResultView : StackPanel
     private readonly MdiIcon _statusIcon = new("sparkles", 13, AppTheme.Insight) { IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _status = new() { Text = "正在翻译…", FontSize = AppTheme.Type.Caption, Foreground = AppTheme.TextSecondary, VerticalAlignment = VerticalAlignment.Center };
     private readonly SelectableTextBlock _heading = new() { FontWeight = FontWeight.Bold, Foreground = AppTheme.TextPrimary, TextWrapping = TextWrapping.Wrap };
-    private readonly SelectableTextBlock _translation = new() { TextWrapping = TextWrapping.Wrap };
-    private readonly Border _translationHost = new() { IsVisible = false };
+    private readonly DictionaryTranslations _translations = new();
     private readonly Border _audio = new() { IsVisible = false };
     internal SpeechPlayback SourcePlayback { get; } = new();
     internal DictionaryDisclosures Disclosures { get; }
+    internal BlockReviewActions BlockReviews { get; } = new();
     private readonly DictionaryDetails _details;
     private readonly ISpeechSynthesisService _speech;
     private readonly AppSettingsStore _settings;
@@ -58,7 +58,7 @@ internal sealed class DictionaryResultView : StackPanel
         _settings = settings;
         _lookup = lookup;
         Disclosures = disclosures ?? new();
-        _details = new DictionaryDetails(speech, settings, lookup, cloze => ExamplePracticeCard.Open(this, cloze), Disclosures);
+        _details = new DictionaryDetails(speech, settings, lookup, cloze => ExamplePracticeCard.Open(this, cloze), Disclosures, BlockReviews);
         _kindPill = new Border
         {
             Background = AppTheme.CardElevatedBg, CornerRadius = new CornerRadius(AppTheme.Radius.Pill),
@@ -88,7 +88,6 @@ internal sealed class DictionaryResultView : StackPanel
             meta.Children.Insert(0, back);
         }
 
-        _translationHost.Child = _translation;
         _heading.VerticalAlignment = VerticalAlignment.Center;
         _audio.VerticalAlignment = VerticalAlignment.Center;
         _audio.Margin = new Thickness(0, AppTheme.Space.XXS, 0, 0);
@@ -126,7 +125,7 @@ internal sealed class DictionaryResultView : StackPanel
         };
         Children.Add(header);
         Children.Add(Spaced(titleLine, AppTheme.Space.S));
-        Children.Add(Spaced(_translationHost, AppTheme.Space.S + 2));
+        Children.Add(Spaced(_translations, AppTheme.Space.S + 2));
         Children.Add(Spaced(_error, AppTheme.Space.M));
         if (!string.IsNullOrWhiteSpace(contextSentence) && contextSentence != query)
             Children.Add(Spaced(CreateContextQuote(contextSentence, query), AppTheme.Space.M));
@@ -232,7 +231,6 @@ internal sealed class DictionaryResultView : StackPanel
         }
         _heading.Text = passage ? "译文" : _query;
         TextStyles.Apply(_heading, passage ? TextRole.PageTitle : TextRole.Display);
-        TextStyles.Apply(_translation, passage ? TextRole.PassageTranslation : TextRole.Translation);
     }
 
     private static TextBlock MetaText(string text) => new()
@@ -288,8 +286,7 @@ internal sealed class DictionaryResultView : StackPanel
 
     public void ShowTranslation(string text)
     {
-        _translation.Text = text;
-        _translationHost.IsVisible = true;
+        _translations.ShowPreview(text, DictionaryQuery.SuggestType(_query));
         if (_status.Text == "正在翻译…") SetStatus("正在生成…", StatusKind.Working);
     }
 
@@ -304,12 +301,14 @@ internal sealed class DictionaryResultView : StackPanel
             _domains.IsVisible = entry.Domains.Count > 0;
             ToolTip.SetTip(_domains, "所属专业领域");
         }
-        if (!string.IsNullOrEmpty(entry.PrimaryTranslation)) ShowTranslation(entry.PrimaryTranslation);
-        if (complete)
+        _translations.ShowEntry(entry, complete ? (q, context) => _lookup(q, context, true) : null, complete ? BlockReviews : null);
+        if (complete && entry.NotebookSyncPending) SetStatus("已缓存 · 生词本待同步", StatusKind.Done, "database-outline");
+        else if (complete)
             switch (entry.Origin)
             {
                 case DictionaryResultOrigin.Cache: SetStatus("本地缓存", StatusKind.Done, "database-outline"); break;
                 case DictionaryResultOrigin.Supplemented: SetStatus("已用 AI 补充", StatusKind.Done, "sparkles"); break;
+                case DictionaryResultOrigin.Reviewed: SetStatus("智能复核已更新", StatusKind.Done, "sparkles"); break;
                 case DictionaryResultOrigin.BuiltIn: SetStatus("内置词条", StatusKind.Done, "book-open-variant"); break;
                 default: SetStatus("AI 翻译", StatusKind.Done, "sparkles"); break;
             }
@@ -317,15 +316,12 @@ internal sealed class DictionaryResultView : StackPanel
         _details.ShowEntry(entry, complete);
         if (complete)
         {
-            var reading = DictionaryReadingText.Primary(entry, (q, context) => _lookup(q, context, true));
-            _translationHost.Child = reading;
-            _readingHintText.Text = reading.HasLinkedTerms || entry.Collocations.Count > 0 || entry.GlossaryReferences.Count > 0
-                ? "点击下划线表达可继续查词 · 选中文字右键可查询" : "选中译文文字后右键即可查词";
+            _readingHintText.Text = _translations.HasLinkedTerms || entry.Collocations.Count > 0 || entry.GlossaryReferences.Count > 0
+                ? "点击下划线词语查词 · 也可选中文字后右键查询" : "选中文字后右键即可查词";
+            if (entry.GrammarHighlights.Count > 0) _readingHintText.Text += " · 紫底标出关键语法";
             _readingHint.IsVisible = true;
         }
-        var hasIpa = !string.IsNullOrWhiteSpace(entry.UsPhonetic) || !string.IsNullOrWhiteSpace(entry.UkPhonetic);
-        var showIpa = !entry.ItemType.IsPassage() && (PhonicsAudioBar.SourceAccent(entry.DetectedSourceLanguage)
-            == SpeechAccent.AmericanEnglish || (entry.DetectedSourceLanguage == "auto" && hasIpa));
+        var showIpa = PhonicsAudioBar.HasEnglishAudio(entry);
         var key = (showIpa, entry.UsPhonetic, entry.UkPhonetic, entry.Pronunciation);
         if (key != _audioKey)
         {
@@ -337,13 +333,6 @@ internal sealed class DictionaryResultView : StackPanel
             {
                 Text = entry.Pronunciation, FontSize = AppTheme.Type.Body, Foreground = AppTheme.TextSecondary, TextWrapping = TextWrapping.Wrap
             };
-        }
-        if (complete && showIpa && entry.ItemType == VocabularyItemType.Word)
-        {
-            var practice = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S };
-            PhonicsAudioBar.AddPracticeButtons(practice, _speech, _settings, entry.SourceText, entry.UsPhonetic,
-                entry.UkPhonetic, entry.Examples.FirstOrDefault()?.SourceSentence);
-            Children.Add(new DictionarySection("发音练习", practice));
         }
         if (complete) Children.Remove(_skeleton);
     }

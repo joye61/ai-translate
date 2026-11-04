@@ -65,8 +65,10 @@ internal sealed partial class DictionaryDetails
                 if (!string.IsNullOrWhiteSpace(form.Label) && form.Label != use &&
                     !senses.Any(s => DictionaryTextMatch.IndexOf(s.Sense.DefinitionZh, form.Label) >= 0))
                     use = string.IsNullOrWhiteSpace(use) ? form.Label : $"{form.Label} · {use}";
-                if (!string.IsNullOrWhiteSpace(use) || !string.IsNullOrWhiteSpace(expression))
-                    rows.Add(new("同形用法", use, Note: expression));
+                var example = senses.Any(s => s.Example?.SourceSentence == form.Example?.SourceSentence &&
+                    s.Example?.TranslatedSentence == form.Example?.TranslatedSentence) ? null : form.Example;
+                if (!string.IsNullOrWhiteSpace(use) || !string.IsNullOrWhiteSpace(expression) || example is not null)
+                    rows.Add(new("同形用法", use, Note: expression, Example: example));
             }
         }
         return rows.ToArray();
