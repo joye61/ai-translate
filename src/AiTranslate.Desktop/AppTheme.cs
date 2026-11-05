@@ -5,7 +5,7 @@ using Avalonia.Media.Immutable;
 namespace AiTranslate.Desktop;
 
 /// <summary>
-/// Warm Paper + Coral "Fresh Light" design tokens. See "UI 设计约定" in AGENTS.md.
+/// Warm Paper + Coral "Fresh Light" design tokens for the desktop UI.
 ///
 /// Color system:
 ///   • Accent (coral)        — brand identity, primary actions, selected/focused state, the authoritative translation.
@@ -28,6 +28,9 @@ public static class AppTheme
     {
         public const double XXS = 4, XS = 6, S = 8, M = 12, L = 16, XL = 20, XXL = 24, XXXL = 32;
     }
+
+    // The expanded Fluent scrollbar occupies 16 DIP. Keep that space on both sides of the content.
+    public static Thickness ScrollContentInset { get; } = new(Space.L, 0);
 
     /// <summary>Consistent corner-radius scale (8–12px for components); prefer these over arbitrary values.</summary>
     public static class Radius

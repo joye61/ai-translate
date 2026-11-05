@@ -3,6 +3,7 @@ using AiTranslate.Desktop.Controls;
 using AiTranslate.Vocabulary;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 
@@ -19,7 +20,12 @@ public sealed class SystemTrayService : IDisposable
     private readonly TrayIcon _trayIcon;
     private readonly AppSettingsStore _settingsStore;
     private readonly IVocabularyService _vocabularyService;
+    private readonly NativeMenuItem _screenshotItem;
+    private readonly NativeMenuItem _selectionItem;
+    private readonly NativeMenuItem _clipboardItem;
     private readonly NativeMenuItem _dueReviewItem;
+    private readonly Bitmap _reviewIcon = RenderMdiIconBitmap("cards", AppTheme.TextSecondary);
+    private readonly Bitmap _notebookIcon = RenderMdiIconBitmap("notebook-outline", AppTheme.TextSecondary);
     private readonly NativeMenuItem _clipboardMonitorItem;
     private readonly NativeMenuItem _selectionMonitorItem;
     private bool _disposed;
@@ -38,37 +44,20 @@ public sealed class SystemTrayService : IDisposable
         _settingsStore = settingsStore;
         _vocabularyService = vocabularyService;
 
-        var showMainItem = new NativeMenuItem("打开 AI Translate 主工作台")
+        var showMainItem = new NativeMenuItem("打开 AI Translate")
         {
             Icon = RenderMdiIconBitmap("translate", AppTheme.AccentBright)
         };
         showMainItem.Click += (_, _) => onShowMainWindow();
 
-        var screenshotItem = new NativeMenuItem($"截图原位翻译 ({_settingsStore.Current.ScreenshotTranslateHotkey})")
-        {
-            Icon = RenderMdiIconBitmap("crop-free", AppTheme.Emerald)
-        };
-        screenshotItem.Click += (_, _) => onStartScreenshotTranslate();
+        _screenshotItem = CreateActionItem("crop-free", onStartScreenshotTranslate);
+        _selectionItem = CreateActionItem("cursor-text", onTriggerSelectionTranslate);
+        _clipboardItem = CreateActionItem("clipboard-text-outline", onTranslateClipboardNow);
 
-        var selectionItem = new NativeMenuItem($"灵动划词速译 ({_settingsStore.Current.SelectionTranslateHotkey})")
-        {
-            Icon = RenderMdiIconBitmap("cursor-text", AppTheme.AccentBright)
-        };
-        selectionItem.Click += (_, _) => onTriggerSelectionTranslate();
-
-        var clipboardItem = new NativeMenuItem($"翻译剪贴板内容 ({_settingsStore.Current.ClipboardTranslateHotkey})")
-        {
-            Icon = RenderMdiIconBitmap("clipboard-text-outline", AppTheme.AccentBright)
-        };
-        clipboardItem.Click += (_, _) => onTranslateClipboardNow();
-
-        _dueReviewItem = new NativeMenuItem("FSRS 科学单词复习")
-        {
-            Icon = RenderMdiIconBitmap("brain", AppTheme.Amber)
-        };
+        _dueReviewItem = new NativeMenuItem();
         _dueReviewItem.Click += (_, _) => onOpenVocabularyReview();
 
-        _clipboardMonitorItem = new NativeMenuItem("后台监听剪贴板自动翻译")
+        _clipboardMonitorItem = new NativeMenuItem("自动翻译剪贴板")
         {
             ToggleType = MenuItemToggleType.CheckBox,
             IsChecked = _settingsStore.Current.EnableClipboardMonitor
@@ -79,7 +68,7 @@ public sealed class SystemTrayService : IDisposable
             _settingsStore.Update(_settingsStore.Current with { EnableClipboardMonitor = next });
         };
 
-        _selectionMonitorItem = new NativeMenuItem("全局鼠标划词即译")
+        _selectionMonitorItem = new NativeMenuItem("鼠标划词即译")
         {
             ToggleType = MenuItemToggleType.CheckBox,
             IsChecked = _settingsStore.Current.EnableMouseSelectionTranslate
@@ -90,15 +79,15 @@ public sealed class SystemTrayService : IDisposable
             _settingsStore.Update(_settingsStore.Current with { EnableMouseSelectionTranslate = next });
         };
 
-        var settingsItem = new NativeMenuItem("AI 引擎与全局热键设置…")
+        var settingsItem = new NativeMenuItem("设置…")
         {
             Icon = RenderMdiIconBitmap("cog-outline", AppTheme.TextSecondary)
         };
         settingsItem.Click += (_, _) => onOpenSettings();
 
-        var exitItem = new NativeMenuItem("完全退出 AI Translate")
+        var exitItem = new NativeMenuItem("退出")
         {
-            Icon = RenderMdiIconBitmap("close", AppTheme.Danger)
+            Icon = RenderMdiIconBitmap("power", AppTheme.TextSecondary)
         };
         exitItem.Click += (_, _) => onExitApplication();
 
@@ -107,12 +96,11 @@ public sealed class SystemTrayService : IDisposable
             Items =
             {
                 showMainItem,
-                new NativeMenuItemSeparator(),
-                screenshotItem,
-                selectionItem,
-                clipboardItem,
-                new NativeMenuItemSeparator(),
                 _dueReviewItem,
+                new NativeMenuItemSeparator(),
+                _screenshotItem,
+                _selectionItem,
+                _clipboardItem,
                 new NativeMenuItemSeparator(),
                 _clipboardMonitorItem,
                 _selectionMonitorItem,
@@ -159,30 +147,72 @@ public sealed class SystemTrayService : IDisposable
 
     public void RefreshTrayStates()
     {
+        // A dictionary lookup can notify the notebook from its cache worker.
+        if (!_trayIcon.Dispatcher.CheckAccess())
+        {
+            _trayIcon.Dispatcher.Post(RefreshTrayStates);
+            return;
+        }
         if (_disposed) return;
         var s = _settingsStore.Current;
         _clipboardMonitorItem.IsChecked = s.EnableClipboardMonitor;
         _selectionMonitorItem.IsChecked = s.EnableMouseSelectionTranslate;
 
+        SetHotkey(_screenshotItem, "截图翻译", s.ScreenshotTranslateHotkey);
+        SetHotkey(_selectionItem, "划词翻译", s.SelectionTranslateHotkey);
+        SetHotkey(_clipboardItem, "剪贴板翻译", s.ClipboardTranslateHotkey);
+
         var stats = _vocabularyService.GetDashboardStats();
-        _dueReviewItem.Header = stats.DueTodayCount > 0
-            ? $"开始今日 FSRS 复习 ({stats.DueTodayCount} 词待复习)"
-            : $"打开超级生词本 (共 {stats.TotalEntries} 词)";
-        _trayIcon.ToolTipText = $"AI Translate · 今日待复习 {stats.DueTodayCount} 词\nAlt+Q 划词 | Alt+S 截图翻译 | 单击打开主界面";
+        var hasDue = stats.DueTodayCount > 0;
+        _dueReviewItem.Header = hasDue ? $"复习今日到期 · {stats.DueTodayCount} 词" : $"打开生词本 · {stats.TotalEntries} 词";
+        _dueReviewItem.Icon = hasDue ? _reviewIcon : _notebookIcon;
+        _trayIcon.ToolTipText = hasDue
+            ? $"AI Translate · 今日待复习 {stats.DueTodayCount} 词"
+            : "AI Translate";
+    }
+
+    private static NativeMenuItem CreateActionItem(string iconName, Action onClick)
+    {
+        var item = new NativeMenuItem { Icon = RenderMdiIconBitmap(iconName, AppTheme.TextSecondary) };
+        item.Click += (_, _) => onClick();
+        return item;
+    }
+
+    // The shortcut goes into Gesture so the menu right-aligns it in a muted column; fall back to the
+    // header text when the stored key has no Avalonia Key equivalent.
+    private static void SetHotkey(NativeMenuItem item, string label, HotkeyGesture hotkey)
+    {
+        var gesture = ToKeyGesture(hotkey);
+        item.Gesture = gesture;
+        item.Header = gesture is null ? $"{label}    {hotkey}" : label;
+    }
+
+    private static KeyGesture? ToKeyGesture(HotkeyGesture hotkey)
+    {
+        var name = hotkey.Key.Trim();
+        if (name.Length == 1 && char.IsDigit(name[0])) name = "D" + name;
+        if (!Enum.TryParse<Key>(name, true, out var key) || key == Key.None) return null;
+
+        var modifiers = KeyModifiers.None;
+        if (hotkey.Modifiers.HasFlag(HotkeyModifiers.Control)) modifiers |= KeyModifiers.Control;
+        if (hotkey.Modifiers.HasFlag(HotkeyModifiers.Alt)) modifiers |= KeyModifiers.Alt;
+        if (hotkey.Modifiers.HasFlag(HotkeyModifiers.Shift)) modifiers |= KeyModifiers.Shift;
+        if (hotkey.Modifiers.HasFlag(HotkeyModifiers.Meta)) modifiers |= KeyModifiers.Meta;
+        return new KeyGesture(key, modifiers);
     }
 
     public static WindowIcon CreateAppWindowIcon() => AppIcons.CreateWindowIcon();
 
+    // Rendered large at 96 DPI: the Fluent menu icon slot is a down-scaling Viewbox (16 DIP) and native
+    // menus resize icons to the menu font, so this stays crisp on high-DPI displays. A DPI-scaled
+    // RenderTargetBitmap would be cropped by Image, which treats its DIP size as the pixel source rect.
     private static Bitmap RenderMdiIconBitmap(string iconName, IBrush brush)
     {
-        var icon = new MdiIcon(iconName, 18, brush)
-        {
-            Width = 24,
-            Height = 24
-        };
-        icon.Measure(new Size(24, 24));
-        icon.Arrange(new Rect(0, 0, 24, 24));
-        var rtb = new RenderTargetBitmap(new PixelSize(24, 24), new Vector(96, 96));
+        const int size = 64;
+        var icon = new MdiIcon(iconName, size, brush) { Width = size, Height = size };
+        icon.Measure(new Size(size, size));
+        icon.Arrange(new Rect(0, 0, size, size));
+        var rtb = new RenderTargetBitmap(new PixelSize(size, size), new Vector(96, 96));
         rtb.Render(icon);
         return rtb;
     }

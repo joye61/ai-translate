@@ -229,4 +229,25 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     internal static extern short GetAsyncKeyState(int vKey);
+
+    internal delegate nint MouseHook(int code, nuint message, nint data);
+    [DllImport("user32.dll", EntryPoint = "SetWindowsHookExW", SetLastError = true)]
+    internal static extern nint SetWindowsHookEx(int hook, MouseHook callback, nint module, uint threadId);
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern bool UnhookWindowsHookEx(nint hook);
+    [DllImport("user32.dll")]
+    internal static extern nint CallNextHookEx(nint hook, int code, nuint message, nint data);
+    [DllImport("user32.dll")]
+    internal static extern uint GetDoubleClickTime();
+    [DllImport("user32.dll")]
+    internal static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")]
+    internal static extern nint WindowFromPoint(Point point);
+    [DllImport("user32.dll")]
+    internal static extern nint GetClipboardOwner();
+    [DllImport("user32.dll", EntryPoint = "CreateWindowExW", CharSet = CharSet.Unicode)]
+    internal static extern nint CreateWindowEx(uint extendedStyle, string className, string name, uint style,
+        int x, int y, int width, int height, nint parent, nint menu, nint instance, nint parameter);
+    [DllImport("user32.dll")]
+    internal static extern bool DestroyWindow(nint window);
 }

@@ -27,7 +27,7 @@ public sealed partial class VocabularyVaultView
         void Lookup(string query, string sentence, bool fromTranslation)
         {
             dialog?.Close();
-            var target = fromTranslation ? DictionaryTranslationDirection.ReverseTarget(result, query, _settings.Current.DictionaryReaderLanguage)
+            var target = fromTranslation ? DictionaryTranslationDirection.ReverseTarget(result, query)
                 : entry.TargetLanguage;
             _lookup(query, sentence, TranslationTriggerSource.ManualInput, "", target);
         }
@@ -55,7 +55,7 @@ public sealed partial class VocabularyVaultView
             reading.Children.Add(StudioUi.CreateInfoTile("收录时的语境", pair, "format-quote-close", AppTheme.TextSecondary));
         }
         // The notebook renders through the same block pipeline as a live lookup, so both read identically.
-        var details = new DictionaryDetails(_speech, _settings, Lookup, cloze => ExamplePracticeCard.Open(reading, cloze), reviews: reviews);
+        var details = new DictionaryDetails(_speech, _settings, Lookup, reviews: reviews);
         details.ShowEntry(result, complete: true);
         reading.Children.Add(details);
 

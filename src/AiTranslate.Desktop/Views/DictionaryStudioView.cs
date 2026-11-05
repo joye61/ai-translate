@@ -40,8 +40,9 @@ public sealed class DictionaryStudioView : UserControl
         _speech = speechService;
         _settings = settingsStore;
         _setStatus = setStatus;
-        _composer = new DictionaryComposer(_settings,
-            query => _ = LookupAsync(query, null, TranslationTriggerSource.ManualInput, "手动查询"), StopLookup);
+        _composer = new DictionaryComposer(_settings, dictionaryService.FindSuggestionAsync,
+            (query, cacheOnly) => _ = RunLookupAsync(query, null, TranslationTriggerSource.ManualInput, "手动查询", null,
+                cacheOnly: cacheOnly), StopLookup);
 
         _scroll = new ScrollViewer
         {
@@ -119,14 +120,14 @@ public sealed class DictionaryStudioView : UserControl
     internal void FocusInput() => _composer.FocusInput();
 
     public Task LookupAsync(string query, string? contextSentence, TranslationTriggerSource source, string sourceTitle, string? targetLanguage = null) =>
-        RunLookupAsync(query, contextSentence, source, sourceTitle,
-            targetLanguage ?? DictionaryTranslationDirection.ResolveTargetId(query, _composer.LanguageId ?? DictionaryTranslationDirection.GetMode(_settings.Current)));
+        RunLookupAsync(query, contextSentence, source, sourceTitle, targetLanguage);
 
     private async Task RunLookupAsync(string query, string? contextSentence, TranslationTriggerSource source, string sourceTitle,
-        string language, DictionaryEntryResult? refreshing = null, bool linked = false)
+        string? language, DictionaryEntryResult? refreshing = null, bool linked = false, bool cacheOnly = false)
     {
-        if (string.IsNullOrWhiteSpace(query)) return;
-        query = query.Trim();
+        query = DictionaryQuery.CleanInput(query);
+        if (query.Length == 0) return;
+        language ??= DictionaryTranslationDirection.ResolveTargetId(query, _composer.LanguageId ?? DictionaryTranslationDirection.GetMode(_settings.Current));
         if (!linked && refreshing is null) _history.Clear();
         StopLookup();
         using var request = new CancellationTokenSource();
@@ -143,7 +144,7 @@ public sealed class DictionaryStudioView : UserControl
                 }), request.Token, partial => Dispatcher.UIThread.Post(() =>
                 {
                     if (_lookup == request) page.ShowEntry(partial, complete: false);
-                }), forceRefresh: refreshing is not null);
+                }), forceRefresh: refreshing is not null, cacheOnly: cacheOnly);
             if (_lookup == request) FinishResult(page, result, contextSentence, source, sourceTitle);
         }
         catch (OperationCanceledException) when (request.IsCancellationRequested) { }
@@ -217,9 +218,9 @@ public sealed class DictionaryStudioView : UserControl
 
     internal void LookupRelated(string text, string sentence, bool fromTranslation)
     {
-        if (_current is not { } parent || string.IsNullOrWhiteSpace(text)) return;
+        if (_current is not { } parent || !DictionaryQuery.HasContent(text)) return;
         var mode = _composer.LanguageId ?? DictionaryTranslationDirection.AutoId;
-        if (fromTranslation) mode = DictionaryTranslationDirection.ReverseTarget(parent.Entry, text, _settings.Current.DictionaryReaderLanguage);
+        if (fromTranslation) mode = DictionaryTranslationDirection.ReverseTarget(parent.Entry, text);
         else if (mode != DictionaryTranslationDirection.AutoId) mode = parent.Entry.TargetLanguage;
         var target = DictionaryTranslationDirection.ResolveTargetId(text, mode);
         if (_history.Count == 16) _history.RemoveAt(0);

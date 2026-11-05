@@ -26,7 +26,7 @@ public sealed partial class VocabularyVaultView
             SizeToContent = height.HasValue ? SizeToContent.Manual : SizeToContent.Height
         };
         if (height.HasValue) window.Height = Math.Min(height.Value, owner.ClientSize.Height);
-        body.Margin = new Thickness(AppTheme.Space.XL, 0, AppTheme.Space.XL, AppTheme.Space.XL);
+        body.Margin += new Thickness(0, 0, 0, AppTheme.Space.XL);
         WindowTitleBar.SetDialogContent(window, body);
         return window;
     }
@@ -46,14 +46,16 @@ public sealed partial class VocabularyVaultView
 
     private static async Task ShowEditor(Window owner, string title, StackPanel fields, Action save, Func<Window, Task<bool>>? remove = null)
     {
+        var inset = new Thickness(AppTheme.Space.XL, 0);
         var error = TextStyles.Create("", TextRole.FieldLabel);
+        error.Margin = inset;
         error.Foreground = AppTheme.Danger;
         error.IsVisible = false;
-        var buttons = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S };
+        var buttons = new WrapPanel { Margin = inset, ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S };
         var body = new Grid
         {
             RowDefinitions = new RowDefinitions("*,Auto,Auto"), RowSpacing = AppTheme.Space.M,
-            Children = { new ScrollViewer { Content = fields }, error, buttons }
+            Children = { new ScrollViewer { Content = fields, Padding = inset }, error, buttons }
         };
         Grid.SetRow(error, 1);
         Grid.SetRow(buttons, 2);
@@ -83,7 +85,8 @@ public sealed partial class VocabularyVaultView
         var buttons = new WrapPanel { ItemSpacing = AppTheme.Space.S };
         var dialog = Dialog(owner, title, new StackPanel
         {
-            Spacing = AppTheme.Space.L, Children = { TextStyles.Create(message, TextRole.Secondary), buttons }
+            Margin = new Thickness(AppTheme.Space.XL, 0), Spacing = AppTheme.Space.L,
+            Children = { TextStyles.Create(message, TextRole.Secondary), buttons }
         });
         var cancel = StudioUi.CreateSecondaryButton("close", "取消", () => dialog.Close(false));
         buttons.Children.Add(cancel);

@@ -1,23 +1,17 @@
 using AiTranslate.Core;
 using AiTranslate.Speech;
 using Avalonia;
-using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Layout;
-using Avalonia.Media;
 
 namespace AiTranslate.Desktop.Controls;
 
-internal sealed class SelectionPopupBody : Grid
+internal sealed class SelectionPopupBody : StackPanel
 {
-    private static readonly TimeSpan RevealDuration = TimeSpan.FromMilliseconds(180);
-    private readonly DraftPaperLoading _draft = new() { MinHeight = 64 };
-    private readonly StackPanel _reading = new() { Spacing = 10, Opacity = 0 };
     private readonly ISpeechSynthesisService _speech;
     private readonly AppSettingsStore _settings;
     private readonly Border _audio = new() { IsVisible = false };
-    private readonly TextBlock _translation = TextStyles.Create(null, TextRole.Translation);
-    private readonly Border _translationHost = new();
+    private readonly DictionaryTranslations _translations = new();
     private readonly Action<string, string> _lookup;
     private readonly StackPanel _senses = new() { Spacing = AppTheme.Space.XS, IsVisible = false };
     private readonly TextBlock _hint = TextStyles.Create(null, TextRole.Secondary);
@@ -29,12 +23,8 @@ internal sealed class SelectionPopupBody : Grid
         _speech = speech;
         _settings = settings;
         _lookup = lookup;
-        MinHeight = 116;
-        RowDefinitions = new RowDefinitions("Auto,*");
-        _translation.FontSize = AppTheme.Type.BodyLarge;
-        _translation.LineHeight = 23;
-        _translation.IsVisible = false;
-        SetIsSharedSizeScope(_senses, true);
+        Spacing = 10;
+        Grid.SetIsSharedSizeScope(_senses, true);
         _hintCard = new Border
         {
             Background = AppTheme.InputBg,
@@ -59,36 +49,23 @@ internal sealed class SelectionPopupBody : Grid
                 }
             }
         };
-        _translationHost.Child = _translation;
-        _reading.Children.AddRange([_audio, _translationHost, _senses, _hintCard]);
-        _reading.Transitions = [new DoubleTransition { Property = OpacityProperty, Duration = RevealDuration }];
-        Children.Add(_reading);
-        SetRow(_draft, 1);
-        Children.Add(_draft);
-        _draft.SizeChanged += (_, e) =>
-        {
-            if (_draft.MinHeight == 0 && e.NewSize.Height == 0) _draft.IsVisible = false;
-        };
+        Children.AddRange([_translations, _senses, _audio, _hintCard]);
     }
 
     public void ShowEntry(DictionaryEntryResult entry, bool complete)
     {
-        _translation.Text = entry.PrimaryTranslation;
-        _translation.IsVisible = !string.IsNullOrWhiteSpace(entry.PrimaryTranslation);
-        if (_translation.IsVisible && !complete)
-        {
-            _draft.Margin = new Thickness(0, AppTheme.Space.S, 0, 0);
-            _draft.ShowDetailCaption(entry.ItemType.IsPassage());
-        }
+        _translations.ShowEntry(entry, complete ? _lookup : null);
 
-        if (_last is null || !entry.Senses.Take(3).SequenceEqual(_last.Senses.Take(3)))
+        if (_last is null || !entry.Senses.SequenceEqual(_last.Senses))
         {
             _senses.Children.Clear();
-            foreach (var sense in entry.Senses.Take(3))
+            foreach (var group in entry.Senses.GroupBy(s => LexicalPart.From(s.PartOfSpeech).Name))
             {
-                var definition = TextStyles.Create(sense.DefinitionZh, TextRole.Body);
-                _senses.Children.Add(string.IsNullOrWhiteSpace(sense.PartOfSpeech) ? definition
-                    : StudioUi.CreateKeyValue(sense.PartOfSpeech, definition, "PopupPos"));
+                var meanings = string.Join("；", group.Select(s => s.DefinitionZh).Distinct());
+                var definition = TextStyles.Create(meanings, TextRole.Definition);
+                var part = LexicalPart.From(group.First().PartOfSpeech);
+                var label = part.Abbreviation.Length > 0 ? part.Abbreviation : part.Name;
+                _senses.Children.Add(label.Length == 0 ? definition : StudioUi.CreateKeyValue(label, definition, "PopupPos"));
             }
             _senses.IsVisible = _senses.Children.Count > 0;
         }
@@ -112,46 +89,12 @@ internal sealed class SelectionPopupBody : Grid
         }
         if (accent is null) _audio.IsVisible = false;
         _last = entry;
-        if (entry.Origin is DictionaryResultOrigin.Cache or DictionaryResultOrigin.BuiltIn) _reading.Transitions = null;
-        if (_translation.IsVisible || _senses.IsVisible || _hintCard.IsVisible) _reading.Opacity = 1;
-        if (complete)
-        {
-            _translationHost.Child = DictionaryReadingText.Primary(entry, _lookup);
-            EndDraft(entry.Origin == DictionaryResultOrigin.Ai);
-        }
     }
 
     public void ShowError(string message)
     {
         _audio.IsVisible = _senses.IsVisible = _hintCard.IsVisible = false;
-        _translation.Text = message;
-        _translation.IsVisible = true;
-        _reading.Opacity = 1;
-        EndDraft(animate: false);
-    }
-
-    private void EndDraft(bool animate)
-    {
-        var height = _draft.Bounds.Height;
-        MinHeight = 0;
-        if (!animate || !IsEffectivelyVisible || height < 1)
-        {
-            _draft.IsVisible = false;
-            return;
-        }
-
-        // Let new fields occupy the sheet's space during the fade, so the window never measures both heights.
-        _draft.Margin = new Thickness(0, _draft.Bounds.Y, 0, 0);
-        _draft.VerticalAlignment = VerticalAlignment.Top;
-        SetRow(_draft, 0);
-        _draft.MinHeight = 0;
-        _draft.Height = height;
-        _draft.Transitions =
-        [
-            new DoubleTransition { Property = HeightProperty, Duration = RevealDuration },
-            new DoubleTransition { Property = OpacityProperty, Duration = RevealDuration }
-        ];
-        _draft.Opacity = 0;
-        _draft.Height = 0;
+        _translations.IsVisible = false;
+        Children.Add(TextStyles.Selectable(message, TextRole.Body));
     }
 }

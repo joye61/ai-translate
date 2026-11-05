@@ -85,7 +85,10 @@ public sealed class TranslationOptionTests
     {
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
-            calls.Add(JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!);
+            var payload = JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!;
+            if (payload["senses"] is not null)
+                return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));
+            calls.Add(payload);
             return Task.FromResult(new AiCompletion(responses[calls.Count - 1], []));
         }
     }

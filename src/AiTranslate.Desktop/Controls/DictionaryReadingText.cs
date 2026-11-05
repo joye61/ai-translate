@@ -115,9 +115,10 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
         find.Click += (_, _) =>
         {
             var selected = block.SelectedText;
-            if (string.IsNullOrWhiteSpace(selected)) return;
+            var query = DictionaryQuery.CleanInput(selected);
+            if (query.Length == 0) return;
             var text = block.Text ?? block.Inlines?.Text ?? "";
-            lookup(selected.Trim(), SentenceAt(text, Math.Min(block.SelectionStart, block.SelectionEnd), selected.Length));
+            lookup(query, SentenceAt(text, Math.Min(block.SelectionStart, block.SelectionEnd), selected.Length));
         };
         var copy = new MenuItem { Header = "复制", [!IsEnabledProperty] = block[!CanCopyProperty] };
         copy.Click += (_, _) => block.Copy();

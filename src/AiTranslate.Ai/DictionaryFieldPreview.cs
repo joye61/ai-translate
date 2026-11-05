@@ -6,8 +6,9 @@ using System.Text.Json;
 namespace AiTranslate.Ai;
 
 /// <summary>Project the received JSON prefix into a read-only preview. The wire response stays intact for final validation.</summary>
-internal sealed class DictionaryFieldPreview(Action<string>? translation, Action<JsonElement>? fields)
+internal sealed class DictionaryFieldPreview(Action<string>? translation, Action<JsonElement>? fields, Action<string>? primaryReady = null)
 {
+    private Action<string>? _primaryReady = primaryReady;
     private readonly StringBuilder _json = new();
     private readonly Stack<char> _closers = new();
     private bool _inString, _valueString, _escaped, _needsQuote, _done;
@@ -18,7 +19,7 @@ internal sealed class DictionaryFieldPreview(Action<string>? translation, Action
 
     public void Append(string delta)
     {
-        if (_done || (translation is null && fields is null)) return;
+        if (_done || (translation is null && fields is null && _primaryReady is null)) return;
         if (_json.Length == 0)
         {
             var start = delta.IndexOf('{');
@@ -107,8 +108,18 @@ internal sealed class DictionaryFieldPreview(Action<string>? translation, Action
                     _lastTranslation = text;
                     translation?.Invoke(text);
                 }
-                // Popup callers only ask for the main translation.
-                if (fields is null && !_needsQuote && _lastTranslation is not null) _done = true;
+                if ((_primaryReady is not null || fields is null) && !string.IsNullOrWhiteSpace(text))
+                {
+                    // A synthetic closing quote may belong to the primary translation or to a later field.
+                    var primaryStillOpen = _needsQuote && _closers.Count == 1 &&
+                        root.EnumerateObject().Last().NameEquals("primaryTranslation");
+                    if (!primaryStillOpen)
+                    {
+                        _primaryReady?.Invoke(text);
+                        _primaryReady = null;
+                        if (fields is null) _done = true;
+                    }
+                }
             }
             fields?.Invoke(root);
             _publishedEnd = _safeEnd;

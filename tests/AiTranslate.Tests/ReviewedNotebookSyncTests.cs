@@ -41,7 +41,7 @@ public sealed class ReviewedNotebookSyncTests
             Assert.Equal(reviewed.Senses, fromDb.Senses);
             Assert.False(fromDb.NotebookSyncPending);
             Assert.DoesNotContain(nameof(DictionaryEntryResult.NotebookSyncPending), JsonSerializer.Serialize(reviewed));
-            Assert.True((await service.LookupOrTranslateAsync("coffee", "zh-Hans")).NotebookSyncPending);
+            Assert.True((await service.LookupOrTranslateAsync("coffee", "zh-Hans", cacheOnly: true)).NotebookSyncPending);
             Assert.Equal(1, calls);
 
             // A concurrent, newer card must keep its revision during repair.

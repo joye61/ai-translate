@@ -26,6 +26,36 @@ public sealed partial class VocabularyService
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
+    public void CompleteCollection(VocabularyEntry collected, DictionaryEntryResult result, long revision)
+    {
+        lock (_gate)
+        {
+            var index = _store.Entries.FindIndex(e => e.Id == collected.Id);
+            if (index < 0) return; // Collection may have been undone while the lookup was running.
+            var card = _store.Entries[index];
+            if (card.DictionaryRevision > revision ||
+                !MatchesDictionary(card, result.SourceText.Trim(), result.TargetLanguage, result.LookupContext)) return;
+
+            // The normal cache refresh may already have applied this revision. Finish the initial
+            // collection defaults as well, preserving any changes made since the user clicked.
+            var updated = card.DictionaryRevision == revision ? card : ApplyDictionary(card, result, revision);
+            var example = result.Examples.FirstOrDefault();
+            updated = updated with
+            {
+                Tags = card.Tags.Count == 0 && collected.Tags.Count == 0 && result.SuggestedTags.Count > 0
+                    ? result.SuggestedTags : card.Tags,
+                ContextSentence = card.ContextSentence.Length == 0 && collected.ContextSentence.Length == 0
+                    ? example?.SourceSentence ?? card.ContextSentence : card.ContextSentence,
+                ContextTranslation = card.ContextTranslation.Length == 0 && collected.ContextTranslation.Length == 0
+                    ? result.ContextMeaning ?? example?.TranslatedSentence ?? card.ContextTranslation : card.ContextTranslation
+            };
+            if (updated == card) return;
+            var entries = new List<VocabularyEntry>(_store.Entries) { [index] = updated with { UpdatedAt = DateTimeOffset.UtcNow } };
+            CommitOrganization(_store.Notebooks, entries);
+        }
+        Changed?.Invoke(this, EventArgs.Empty);
+    }
+
     public void RefreshCollectedEntries(DictionaryEntryResult result, long revision)
     {
         lock (_gate)

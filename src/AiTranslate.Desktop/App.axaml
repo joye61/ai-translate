@@ -33,8 +33,20 @@
                     <SolidColorBrush x:Key="ToggleSwitchKnobFillOffPointerOver" Color="#FF5E564D" />
                     <SolidColorBrush x:Key="ToggleSwitchKnobFillOffPressed" Color="#FF5E564D" />
                     <SolidColorBrush x:Key="ProgressBarBackground" Color="#FFEDE8E1" />
+                    <SolidColorBrush x:Key="MenuFlyoutItemForeground" Color="#FF26211C" />
+                    <SolidColorBrush x:Key="MenuFlyoutItemForegroundPointerOver" Color="#FF26211C" />
+                    <SolidColorBrush x:Key="MenuFlyoutItemForegroundPressed" Color="#FF26211C" />
+                    <SolidColorBrush x:Key="MenuFlyoutItemBackgroundPointerOver" Color="#FFF1ECE6" />
+                    <SolidColorBrush x:Key="MenuFlyoutItemBackgroundPressed" Color="#FFE9E3DB" />
+                    <SolidColorBrush x:Key="MenuFlyoutItemKeyboardAcceleratorTextForeground" Color="#FF8F867C" />
+                    <SolidColorBrush x:Key="MenuFlyoutItemKeyboardAcceleratorTextForegroundPointerOver" Color="#FF5E564D" />
+                    <SolidColorBrush x:Key="MenuFlyoutItemKeyboardAcceleratorTextForegroundPressed" Color="#FF5E564D" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
+            <Thickness x:Key="ComboBoxItemThemePadding">16,5,16,7</Thickness>
+            <Thickness x:Key="MenuIconPresenterMargin">0,0,10,0</Thickness>
+            <Thickness x:Key="MenuInputGestureTextMargin">32,0,2,0</Thickness>
+            <Thickness x:Key="MenuFlyoutScrollerMargin">0</Thickness>
         </ResourceDictionary>
     </Application.Resources>
     <Application.Styles>
@@ -65,6 +77,15 @@
         <Style Selector="TextBox.chat-input /template/ Border#PART_BorderElement">
             <Setter Property="Background" Value="{x:Static local:AppTheme.CardBg}" />
             <Setter Property="BorderThickness" Value="0" />
+        </Style>
+
+        <!-- Fluent applies TextBox.Padding outside the scroller. Put the horizontal inset
+             inside it so wrapped lines clear the expanded track on the control's edge. -->
+        <Style Selector="TextBox[TextWrapping=Wrap]">
+            <Setter Property="Padding" Value="0,6" />
+        </Style>
+        <Style Selector="TextBox[TextWrapping=Wrap] /template/ ScrollViewer#PART_ScrollViewer">
+            <Setter Property="Padding" Value="{x:Static local:AppTheme.ScrollContentInset}" />
         </Style>
 
         <!-- Quiet "chip" selectors (composer): warm-gray pill, no border, hover/press tint only. -->
@@ -193,6 +214,48 @@
         </Style>
         <Style Selector="Button.nav.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{x:Static local:AppTheme.AccentSoft}" />
+        </Style>
+
+        <!-- Menu flyouts (the Windows tray menu is an Avalonia MenuFlyoutPresenter in a transparent window):
+             white card + popup shadow, quiet warm-gray rows, muted shortcut column, coral check marks.
+             Values the Fluent template sets itself (margins, gesture colors) come from the Menu* resources
+             above; template parts otherwise only yield to pseudo-class-triggered styles. -->
+        <Style Selector="MenuFlyoutPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.CardBg}" />
+            <Setter Property="BorderBrush" Value="{x:Static local:AppTheme.BorderSubtle}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Margin" Value="12,8,12,16" />
+            <Setter Property="MinWidth" Value="236" />
+            <Setter Property="FontFamily" Value="{x:Static local:AppTheme.BodyFont}" />
+        </Style>
+        <Style Selector="MenuFlyoutPresenter:not(:empty) /template/ Border#LayoutRoot">
+            <Setter Property="Padding" Value="6" />
+            <Setter Property="BoxShadow" Value="{x:Static local:AppTheme.PopupShadow}" />
+        </Style>
+        <Style Selector="MenuFlyoutPresenter MenuItem">
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="FontSize" Value="13.5" />
+        </Style>
+        <Style Selector="MenuFlyoutPresenter MenuItem /template/ TextBlock#PART_InputGestureText">
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <!-- Toggle checks share the (empty) icon column so labels align with the action rows. -->
+        <Style Selector="MenuFlyoutPresenter MenuItem:toggle /template/ ContentControl#PART_ToggleIconPresenter">
+            <Setter Property="(Grid.Column)" Value="1" />
+        </Style>
+        <Style Selector="MenuFlyoutPresenter MenuItem:checked:toggle /template/ ContentControl#PART_ToggleIconPresenter">
+            <Setter Property="Content">
+                <Template>
+                    <local:MdiIcon IconName="check" IconSize="16" Foreground="{x:Static local:AppTheme.AccentBright}" />
+                </Template>
+            </Setter>
+        </Style>
+        <Style Selector="MenuFlyoutPresenter Separator">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.BorderSubtle}" />
+            <Setter Property="Height" Value="1" />
+            <Setter Property="Margin" Value="10,5" />
         </Style>
 
         <!-- List rows: neutral hover, quiet accent-soft selection (same language as the active nav row). -->

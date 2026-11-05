@@ -30,7 +30,14 @@ public sealed class SelectionPopupWindow : Window
     private readonly TextBlock _sourceTagText;
     private readonly NotebookBookmarkButton _addNotebookBtn;
 
-    private CancellationTokenSource? _cts;
+    private sealed class Lookup
+    {
+        public CancellationTokenSource Cancellation { get; } = new();
+        public List<VocabularyEntry> Collections { get; } = [];
+    }
+
+    private Lookup? _lookup;
+    private DictionaryEntryResult? _bookmarkEntry;
     private DictionaryEntryResult? _currentResult;
     private CapturedTextEvent? _currentCapture;
 
@@ -39,7 +46,8 @@ public sealed class SelectionPopupWindow : Window
         IVocabularyService vocabularyService,
         ISpeechSynthesisService speechService,
         AppSettingsStore settings,
-        Action<DictionaryEntryResult, CapturedTextEvent, string?, string?> onExpandToMain)
+        Action<DictionaryEntryResult, CapturedTextEvent, string?, string?> onExpandToMain,
+        IDesktopPlatformService? platform = null)
     {
         _dictionaryService = dictionaryService;
         _vocabularyService = vocabularyService;
@@ -53,6 +61,7 @@ public sealed class SelectionPopupWindow : Window
         MaxHeight = 460;
         WindowDecorations = WindowDecorations.None;
         Topmost = true;
+        ShowActivated = false;
         ShowInTaskbar = false;
         Background = Brushes.Transparent;
 
@@ -64,11 +73,16 @@ public sealed class SelectionPopupWindow : Window
 
         _addNotebookBtn = new NotebookBookmarkButton(collect =>
         {
-            if (_currentResult is null) return;
+            if (_bookmarkEntry is not { } entry || _currentCapture is not { } capture) return;
             try
             {
-                if (collect) AddCurrentToVocabulary();
-                else _vocabularyService.RemoveFromNotebook(_currentResult, _settings.Current.DefaultNotebookId);
+                if (collect)
+                {
+                    var saved = _vocabularyService.AddOrUpdateFromDictionary(entry, _settings.Current.DefaultNotebookId,
+                        source: capture.Source, sourceTitle: capture.SourceWindowTitle ?? "");
+                    _lookup?.Collections.Add(saved);
+                }
+                else _vocabularyService.RemoveFromNotebook(entry, _settings.Current.DefaultNotebookId);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -84,7 +98,8 @@ public sealed class SelectionPopupWindow : Window
         {
             if (_currentResult is not null && Clipboard is not null)
             {
-                await Clipboard.SetTextAsync(_currentResult.PrimaryTranslation);
+                try { await Clipboard.SetTextAsync(_currentResult.PrimaryTranslation); }
+                catch (System.Runtime.InteropServices.COMException) { _sourceTagText.Text = "剪贴板暂不可用，请再试一次"; }
             }
         });
 
@@ -95,8 +110,10 @@ public sealed class SelectionPopupWindow : Window
                 _ = ShowAndTranslateAsync(capture, forceRefresh: true, result.TargetLanguage);
         });
 
+        var inset = AppTheme.ScrollContentInset;
         var headerBar = new Grid
         {
+            Margin = inset,
             ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto,Auto"),
             ColumnSpacing = 6,
             Children =
@@ -127,12 +144,14 @@ public sealed class SelectionPopupWindow : Window
 
         _headwordText = TextStyles.Apply(new TextBlock
         {
+            Margin = inset,
             TextWrapping = TextWrapping.Wrap,
             MaxLines = 3
         }, TextRole.PageTitle);
 
         _bodyHost = new ScrollViewer
         {
+            Padding = inset,
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto
         };
@@ -143,7 +162,7 @@ public sealed class SelectionPopupWindow : Window
             BorderBrush = AppTheme.BorderStrong,
             BorderThickness = new Thickness(1.5),
             CornerRadius = new CornerRadius(12),
-            Padding = new Thickness(16, 14),
+            Padding = new Thickness(0, 14),
             Child = new Grid
             {
                 RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*"),
@@ -151,7 +170,7 @@ public sealed class SelectionPopupWindow : Window
                 Children =
                 {
                     headerBar,
-                    new Border { [Grid.RowProperty] = 1, Height = 1, Background = AppTheme.BorderSubtle },
+                    new Border { [Grid.RowProperty] = 1, Height = 1, Margin = inset, Background = AppTheme.BorderSubtle },
                     _headwordText,
                     _bodyHost
                 }
@@ -173,9 +192,24 @@ public sealed class SelectionPopupWindow : Window
         };
 
         Deactivated += (_, _) => Hide();
+        if (platform is not null)
+        {
+            PropertyChanged += (_, e) =>
+            {
+                if (e.Property != IsVisibleProperty) return;
+                if (IsVisible) platform.PointerPressed += DismissOutside;
+                else platform.PointerPressed -= DismissOutside;
+            };
+        }
 
         Content = rootCard;
     }
+
+    private void DismissOutside(PointD point) => Dispatcher.UIThread.Post(() =>
+    {
+        if (IsVisible && !new Rect(ClientSize).Contains(this.PointToClient(new PixelPoint((int)point.X, (int)point.Y))))
+            Hide();
+    });
 
     public async Task ShowAndTranslateAsync(CapturedTextEvent captured, bool forceRefresh = false, string? targetLanguage = null)
     {
@@ -185,12 +219,19 @@ public sealed class SelectionPopupWindow : Window
             return;
         }
 
-        _cts?.Cancel();
-        using var request = new CancellationTokenSource();
-        _cts = request;
-        var token = request.Token;
+        var query = DictionaryQuery.CleanInput(captured.Text);
+        if (query.Length == 0) return;
+        captured = captured with { Text = query };
+        // A collected lookup still owes its notebook entry the final details after the popup moves on.
+        if (_lookup is { Collections.Count: 0 } old) old.Cancellation.Cancel();
+        var request = new Lookup();
+        using var cancellation = request.Cancellation;
+        _lookup = request;
+        var token = cancellation.Token;
+        var started = DateTime.UtcNow.Ticks;
         var previous = forceRefresh && _currentCapture == captured ? _currentResult : null;
         _currentResult = null;
+        _bookmarkEntry = null;
         _currentCapture = captured;
 
         _sourceTagText.Text = captured.Source switch
@@ -209,7 +250,6 @@ public sealed class SelectionPopupWindow : Window
 
         PositionNearCursor(captured.ScreenPoint);
         if (!IsVisible) Show();
-        Activate();
 
         try
         {
@@ -220,36 +260,40 @@ public sealed class SelectionPopupWindow : Window
                 cancellationToken: token,
                 onEntryPreview: partial => Dispatcher.UIThread.Post(() =>
                 {
-                    if (_cts == request) body.ShowEntry(partial, complete: false);
+                    if (_lookup == request) body.ShowEntry(partial, complete: false);
                 }),
-                forceRefresh: forceRefresh);
+                forceRefresh: forceRefresh,
+                onUsableEntry: entry => Dispatcher.UIThread.Post(() =>
+                {
+                    if (_lookup != request) return;
+                    _bookmarkEntry = entry;
+                    body.ShowEntry(entry, complete: false);
+                    RefreshBookmark();
+                }));
 
-            if (token.IsCancellationRequested) return;
+            foreach (var collected in request.Collections)
+                _vocabularyService.CompleteCollection(collected, result, result.CacheStamp?.Revision ?? started);
+            if (_lookup != request) return;
 
             ShowResult(result, body);
-            if (!forceRefresh && _settings.Current.AutoAddLookedUpWordsToNotebook && result.ItemType == VocabularyItemType.Word &&
-                !_vocabularyService.IsCollected(result, _settings.Current.DefaultNotebookId))
-            {
-                AddCurrentToVocabulary();
-            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            if (token.IsCancellationRequested) return;
-            if (previous is null) body.ShowError($"翻译出错：{ex.Message}");
+            if (_lookup != request) return;
+            if ((previous ?? _bookmarkEntry) is not { } usable) body.ShowError($"翻译出错：{ex.Message}");
             else
             {
-                ShowResult(previous, body);
-                _sourceTagText.Text = "刷新失败";
+                ShowResult(usable, body);
+                _sourceTagText.Text = previous is null ? "详情未完成" : "刷新失败";
                 ToolTip.SetTip(_sourceTagText, ex.Message);
             }
         }
         finally
         {
-            if (_cts == request) _cts = null;
+            if (_lookup == request) _lookup = null;
         }
     }
 
@@ -263,6 +307,7 @@ public sealed class SelectionPopupWindow : Window
     private void ShowResult(DictionaryEntryResult result, SelectionPopupBody body)
     {
         _currentResult = result;
+        _bookmarkEntry = result;
         RefreshBookmark();
         if (result.Origin == DictionaryResultOrigin.Cache) _sourceTagText.Text = "本地缓存";
         body.ShowEntry(result, complete: true);
@@ -270,27 +315,16 @@ public sealed class SelectionPopupWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        _cts?.Cancel();
-        _cts = null;
+        _lookup?.Cancellation.Cancel();
+        _lookup = null;
         base.OnClosed(e);
-    }
-
-    private void AddCurrentToVocabulary()
-    {
-        if (_currentResult is null) return;
-        _vocabularyService.AddOrUpdateFromDictionary(
-            _currentResult,
-            notebookId: _settings.Current.DefaultNotebookId,
-            source: _currentCapture?.Source ?? TranslationTriggerSource.SelectionPopup,
-            sourceTitle: _currentCapture?.SourceWindowTitle ?? "");
-        RefreshBookmark();
     }
 
     internal void RefreshBookmark()
     {
-        _addNotebookBtn.IsEnabled = _currentResult is not null;
-        _addNotebookBtn.SetSaved(_currentResult is not null &&
-            _vocabularyService.IsCollected(_currentResult, _settings.Current.DefaultNotebookId));
+        _addNotebookBtn.IsEnabled = _bookmarkEntry is not null;
+        _addNotebookBtn.SetSaved(_bookmarkEntry is not null &&
+            _vocabularyService.IsCollected(_bookmarkEntry, _settings.Current.DefaultNotebookId));
     }
 
     private void PositionNearCursor(PointD cursor)

@@ -4,6 +4,7 @@ using AiTranslate.Desktop;
 using AiTranslate.Desktop.Controls;
 using AiTranslate.Speech;
 using AiTranslate.Vocabulary;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Headless;
@@ -175,6 +176,66 @@ public sealed class StructuredInsightTests
         finally { directory.Delete(true); }
     }
 
+    [Theory]
+    [InlineData("*,3*", true)]
+    [InlineData("Auto,*", true)]
+    [InlineData("3*,*", false)]
+    public async Task ComparisonTableLendsUnusedSpaceToEitherTextColumn(string columns, bool longFirst)
+    {
+        await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
+        await session.Dispatch(() =>
+        {
+            var longText = TextStyles.Selectable("a vocabulary of specialist technical expressions", TextRole.Term);
+            var shortText = TextStyles.Selectable("术语", TextRole.Secondary);
+            Control[] cells = longFirst ? [longText, shortText] : [shortText, longText];
+            var window = new Window { Width = 640, Height = 220, Content = RichBlocks.Table(columns, [], [cells]) };
+            window.Show();
+            try
+            {
+                longText.Measure(Size.Infinity);
+                shortText.Measure(Size.Infinity);
+                window.Width = longText.DesiredSize.Width + shortText.DesiredSize.Width + 60;
+                window.UpdateLayout();
+                Assert.Single(longText.TextLayout.TextLines);
+                window.Width = 240;
+                window.UpdateLayout();
+                Assert.True(longText.TextLayout.TextLines.Count > 1);
+                Assert.Single(shortText.TextLayout.TextLines);
+                Assert.InRange(shortText.TranslatePoint(new Point(shortText.Bounds.Width, 0), window)!.Value.X, 0, window.Width);
+            }
+            finally { window.Close(); }
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task TranslationOptionMeaningsStayDistinctAndSeparatelySelectable()
+    {
+        await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
+        await session.Dispatch(() =>
+        {
+            TranslationOption[] options = [new("今天就到这儿吧。", "自然口语", "同事之间结束讨论时使用"),
+                new("今天到此为止。", "语气较为正式", "适合宣布会议结束")];
+            var table = DictionaryInsightBlocks.Options(options, passage: true, lookup: null)!;
+            var window = new Window { Content = table, Width = 500, Height = 320 };
+            window.Show();
+            try
+            {
+                window.UpdateLayout();
+                var blocks = table.GetVisualDescendants().OfType<SelectableTextBlock>().ToArray();
+                foreach (var option in options)
+                {
+                    var main = blocks.Single(t => t.Text == option.Text);
+                    var note = blocks.Single(t => t.Text == option.Meaning);
+                    Assert.True(main.FontSize > note.FontSize);
+                    Assert.NotEqual(main.Foreground, note.Foreground);
+                    note.SelectAll();
+                    Assert.Equal(option.Meaning, note.SelectedText);
+                }
+            }
+            finally { window.Close(); }
+        }, CancellationToken.None);
+    }
+
     [Fact]
     public async Task StructuredBlocksRenderAsRichDocumentsAndSurviveStreamingUpdates()
     {
@@ -187,7 +248,7 @@ public sealed class StructuredInsightTests
                 using var speech = new KokoroSpeechService(directory.FullName);
                 var settings = new AppSettingsStore(Path.Combine(directory.FullName, "settings.json"));
                 var looked = new List<string>();
-                var details = new DictionaryDetails(speech, settings, (q, _, _) => looked.Add(q), _ => { });
+                var details = new DictionaryDetails(speech, settings, (q, _, _) => looked.Add(q));
                 var window = new Window { Content = new ScrollViewer { Content = details }, Width = 720, Height = 600 };
                 window.Show();
                 try

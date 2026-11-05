@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -325,9 +325,8 @@ public static class StudioUi
     public static Grid CreateKeyValue(string label, Control value, string sharedGroup = "KvLabel", double labelTop = 1)
     {
         var key = TextStyles.Create(label, TextRole.Label);
-        key.MaxWidth = 120;
         key.Margin = new Thickness(0, labelTop, AppTheme.Space.M, 0);
-        var grid = new Grid
+        var grid = new KeyValueGrid(key, value)
         {
             ColumnDefinitions =
             {
@@ -338,6 +337,19 @@ public static class StudioUi
         };
         Grid.SetColumn(value, 1);
         return grid;
+    }
+
+    private sealed class KeyValueGrid(TextBlock key, Control value) : Grid
+    {
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            value.Measure(Size.Infinity);
+            // A short value can lend its unused space to a long label. When both are long,
+            // leave the value at least half the row and let each side wrap.
+            var budget = Math.Max(availableSize.Width / 2, availableSize.Width - value.DesiredSize.Width);
+            key.MaxWidth = Math.Max(0, budget - key.Margin.Left - key.Margin.Right);
+            return base.MeasureOverride(availableSize);
+        }
     }
 
     /// <summary>

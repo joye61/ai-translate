@@ -24,9 +24,9 @@ internal static class UsageContrastView
         };
         Grid.SetColumn(versus, 1);
         Grid.SetColumn(right, 2);
-        return new Grid
+        return new ReadingGrid("*,Auto,*")
         {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto,*"), ColumnSpacing = AppTheme.Space.M,
+            ColumnSpacing = AppTheme.Space.M,
             Children = { left, versus, right }
         };
     }

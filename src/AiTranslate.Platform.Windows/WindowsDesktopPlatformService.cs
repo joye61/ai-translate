@@ -11,7 +11,7 @@ namespace AiTranslate.Platform.Windows;
 /// - Multi-monitor physical pixel screen capture
 /// - Multi-hotkey message pump
 /// - Clipboard polling / sequence listener with self-copy suppression
-/// - Global mouse drag-selection detector + Ctrl+C text extraction with clipboard snapshot & restoration
+/// - Global mouse selection capture via UI Automation, with a clipboard-preserving fallback
 /// </summary>
 public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
 {
@@ -21,15 +21,47 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
     private uint _lastClipboardSeq;
     private string _lastClipboardText = "";
     private volatile bool _suppressClipboardEvents;
-    private bool _wasLeftButtonDown;
-    private PointD _mouseDownPos;
-    private DateTimeOffset _mouseDownTime;
-    private int _selectionCaptureInFlight;
+    private readonly SemaphoreSlim _captureGate = new(1, 1);
+    private readonly WindowsTextSelection _textSelection = new();
+    private volatile bool _monitorSelection;
+    private int _gestureVersion;
+    private NativeMethods.Point _downPoint;
+    private long _downTime;
+    private nint _downWindow;
+    private bool _multiClick;
+    private Action<PointD>? _pointerPressed;
+    private nint _localSelectionWindow;
+
+    public event Action<PointD>? PointerPressed
+    {
+        add { _pointerPressed += value; UpdateMouseHook(); }
+        remove { _pointerPressed -= value; UpdateMouseHook(); }
+    }
+
+    private void UpdateMouseHook(bool renew = false) => _hotkeyPump.SetMouseHook(
+        _monitorSelection || _pointerPressed is not null || Volatile.Read(ref _localSelectionWindow) != 0 ? OnMouse : null, renew);
+
+    public void SetLocalTextSelection(nint window)
+    {
+        Interlocked.Exchange(ref _localSelectionWindow, window);
+        // A translator may have installed its hook after our background capture was enabled.
+        UpdateMouseHook(renew: window != 0);
+    }
 
     public string Name => "Windows";
 
     public bool IsClipboardMonitoringEnabled { get; set; }
-    public bool IsMouseSelectionMonitoringEnabled { get; set; }
+    public bool IsMouseSelectionMonitoringEnabled
+    {
+        get => _monitorSelection;
+        set
+        {
+            if (_monitorSelection == value) return;
+            _monitorSelection = value;
+            Interlocked.Increment(ref _gestureVersion);
+            UpdateMouseHook();
+        }
+    }
 
     public event EventHandler<CapturedTextEvent>? ClipboardTextChanged;
     public event EventHandler<CapturedTextEvent>? MouseSelectionCaptured;
@@ -154,57 +186,125 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
         _hotkeyPump.Unregister((int)id);
     }
 
-    public async Task<CapturedTextEvent?> TryCaptureSelectedTextAsync(CancellationToken cancellationToken = default)
+    public Task<CapturedTextEvent?> TryCaptureSelectedTextAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        if (Interlocked.CompareExchange(ref _selectionCaptureInFlight, 1, 0) != 0)
-            return null;
+        return CaptureSelectionAsync(NativeMethods.GetForegroundWindow(), GetCursorPosition(), null, true, cancellationToken);
+    }
 
+    private nint OnMouse(int code, nuint message, nint data)
+    {
+        if (code >= 0 && message is 0x0201 or 0x0202)
+        {
+            var point = Marshal.PtrToStructure<NativeMethods.Point>(data);
+            var window = NativeMethods.GetForegroundWindow();
+            var local = Volatile.Read(ref _localSelectionWindow);
+            if (message == 0x0201)
+            {
+                // A new press ends any stale gesture, e.g. if the old window lost mouse capture.
+                Interlocked.Exchange(ref _localSelectionWindow, 0);
+                _pointerPressed?.Invoke(new(point.X, point.Y));
+                Interlocked.Increment(ref _gestureVersion);
+                var now = Environment.TickCount64;
+                _multiClick = _downWindow == window && now - _downTime <= NativeMethods.GetDoubleClickTime() &&
+                    Math.Abs(point.X - _downPoint.X) <= NativeMethods.GetSystemMetrics(36) / 2 &&
+                    Math.Abs(point.Y - _downPoint.Y) <= NativeMethods.GetSystemMetrics(37) / 2;
+                _downTime = now;
+                _downPoint = point;
+                _downWindow = window;
+            }
+            else if (local != 0 && (window == local || NativeMethods.WindowFromPoint(point) == local))
+            {
+                // Zero delivers the release to Avalonia. Omitting CallNextHookEx for this one
+                // event stops downstream gesture observers from harvesting the local selection.
+                return 0;
+            }
+            else if (_monitorSelection && IsExternalWindow(window) && IsExternalWindow(NativeMethods.WindowFromPoint(point)))
+            {
+                var canCopy = _multiClick || Math.Abs(point.X - _downPoint.X) >= NativeMethods.GetSystemMetrics(68) ||
+                    Math.Abs(point.Y - _downPoint.Y) >= NativeMethods.GetSystemMetrics(69) ||
+                    (NativeMethods.GetAsyncKeyState(0x10) & 0x8000) != 0;
+                _ = CaptureAfterReleaseAsync(window, new(point.X, point.Y), Volatile.Read(ref _gestureVersion), canCopy);
+            }
+        }
+        return NativeMethods.CallNextHookEx(0, code, message, data);
+    }
+
+    private async Task CaptureAfterReleaseAsync(nint window, PointD point, int version, bool canCopy)
+    {
+        // Low-level hooks run before the target processes the release. Give it time to commit the selection.
+        await Task.Delay(60).ConfigureAwait(false);
+        var result = await CaptureSelectionAsync(window, point, version, canCopy, CancellationToken.None).ConfigureAwait(false);
+        if (result is not null && version == Volatile.Read(ref _gestureVersion) && _monitorSelection && Volatile.Read(ref _disposed) == 0)
+            MouseSelectionCaptured?.Invoke(this, result);
+    }
+
+    private async Task<CapturedTextEvent?> CaptureSelectionAsync(nint window, PointD point, int? version, bool canCopy, CancellationToken token)
+    {
+        bool Current() => IsExternalWindow(window) && window == NativeMethods.GetForegroundWindow() &&
+            Volatile.Read(ref _disposed) == 0 && (version is null || version == Volatile.Read(ref _gestureVersion));
+        await _captureGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            return await Task.Run(() =>
+            {
+                if (!Current()) return null;
+                var title = GetForegroundWindowTitle();
+                var text = _textSelection.Read(point, version.HasValue);
+                if (text is null && canCopy && Current())
+                {
+                    token.ThrowIfCancellationRequested();
+                    text = CopySelectedText(window, Current);
+                }
+                token.ThrowIfCancellationRequested();
+                return string.IsNullOrWhiteSpace(text) || !Current() ? null :
+                    new CapturedTextEvent(text.Trim(), TranslationTriggerSource.SelectionPopup, point, title);
+            }, token).ConfigureAwait(false);
+        }
+        finally { _captureGate.Release(); }
+    }
+
+    private static bool IsExternalWindow(nint window) => window != 0 &&
+        NativeMethods.GetWindowThreadProcessId(window, out var pid) != 0 && pid != (uint)Environment.ProcessId;
+
+    private string? CopySelectedText(nint window, Func<bool> current)
+    {
+        // Let a selection hotkey or Shift+click finish before injecting an unmodified Ctrl+C.
+        static bool ModifierDown() => new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(key => (NativeMethods.GetAsyncKeyState(key) & 0x8000) != 0);
+        for (var i = 0; i < 20 && ModifierDown() && current(); i++) Thread.Sleep(20);
+        if (ModifierDown() || !current()) return null;
+        using var snapshot = ClipboardSnapshot.TryTake();
+        if (snapshot is null || !current() || snapshot.Sequence != NativeMethods.GetClipboardSequenceNumber()) return null;
+        // A real owner is needed for EmptyClipboard followed by SetClipboardData.
+        var owner = NativeMethods.CreateWindowEx(0, "STATIC", "", 0, 0, 0, 0, 0, -3, 0, 0, 0);
+        if (owner == 0) return null;
         _suppressClipboardEvents = true;
         try
         {
-            var fgHwnd = NativeMethods.GetForegroundWindow();
-            if (fgHwnd != 0 && NativeMethods.GetWindowThreadProcessId(fgHwnd, out var pid) != 0 && pid == (uint)Environment.ProcessId)
-                return null;
-
-            var windowTitle = GetForegroundWindowTitle();
-            var cursor = GetCursorPosition();
-            var clipboardSnapshot = TrySnapshotClipboard();
-            var beforeSeq = NativeMethods.GetClipboardSequenceNumber();
-
-            SendCtrlC();
-
-            string? captured = null;
+            NativeMethods.GetWindowThreadProcessId(window, out var targetPid);
+            if (!current() || snapshot.Sequence != NativeMethods.GetClipboardSequenceNumber() || !SendCtrlC()) return null;
             for (var i = 0; i < 12; i++)
             {
-                await Task.Delay(25, cancellationToken).ConfigureAwait(false);
-                var currentSeq = NativeMethods.GetClipboardSequenceNumber();
-                if (currentSeq != beforeSeq)
+                Thread.Sleep(25);
+                if (NativeMethods.GetClipboardSequenceNumber() == snapshot.Sequence) continue;
+                if (!ClipboardSnapshot.TryOpen(owner)) continue;
+                try
                 {
-                    captured = TryReadClipboardUnicodeText();
-                    break;
+                    // Read and restore under the same lock. Another application's copy always wins.
+                    var clipboardOwner = NativeMethods.GetClipboardOwner();
+                    if (clipboardOwner == 0 || NativeMethods.GetWindowThreadProcessId(clipboardOwner, out var pid) == 0 ||
+                        pid != targetPid) return null;
+                    try { return ReadOpenClipboardText(); }
+                    finally { snapshot.Restore(); _lastClipboardSeq = NativeMethods.GetClipboardSequenceNumber(); }
                 }
+                finally { NativeMethods.CloseClipboard(); }
             }
-
-            // Ctrl+C only mutated the clipboard if its sequence number actually changed; restore the
-            // full original snapshot (every format, not just text) so non-text content isn't lost.
-            if (clipboardSnapshot is not null && NativeMethods.GetClipboardSequenceNumber() != beforeSeq)
-                TryRestoreClipboard(clipboardSnapshot);
-
-            _lastClipboardSeq = NativeMethods.GetClipboardSequenceNumber();
-            if (string.IsNullOrWhiteSpace(captured))
-                return null;
-
-            return new CapturedTextEvent(
-                Text: captured.Trim(),
-                Source: TranslationTriggerSource.SelectionPopup,
-                ScreenPoint: cursor,
-                SourceWindowTitle: windowTitle);
+            return null;
         }
         finally
         {
             _suppressClipboardEvents = false;
-            Interlocked.Exchange(ref _selectionCaptureInFlight, 0);
+            NativeMethods.DestroyWindow(owner);
         }
     }
 
@@ -218,7 +318,8 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
             if (seq != _lastClipboardSeq)
             {
                 _lastClipboardSeq = seq;
-                if (IsClipboardMonitoringEnabled && !_suppressClipboardEvents)
+                var owner = NativeMethods.GetClipboardOwner();
+                if (IsClipboardMonitoringEnabled && !_suppressClipboardEvents && (owner == 0 || IsExternalWindow(owner)))
                 {
                     var text = TryReadClipboardUnicodeText()?.Trim();
                     if (!string.IsNullOrWhiteSpace(text) && text.Length <= 8000 && !string.Equals(text, _lastClipboardText, StringComparison.Ordinal))
@@ -235,49 +336,13 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
                 }
             }
 
-            if (IsMouseSelectionMonitoringEnabled && Volatile.Read(ref _selectionCaptureInFlight) == 0)
-            {
-                const int VkLButton = 0x01;
-                var isDown = (NativeMethods.GetAsyncKeyState(VkLButton) & 0x8000) != 0;
-                if (isDown && !_wasLeftButtonDown)
-                {
-                    _wasLeftButtonDown = true;
-                    _mouseDownPos = GetCursorPosition();
-                    _mouseDownTime = DateTimeOffset.UtcNow;
-                }
-                else if (!isDown && _wasLeftButtonDown)
-                {
-                    _wasLeftButtonDown = false;
-                    var upPos = GetCursorPosition();
-                    var durationMs = (DateTimeOffset.UtcNow - _mouseDownTime).TotalMilliseconds;
-                    var dx = Math.Abs(upPos.X - _mouseDownPos.X);
-                    var dy = Math.Abs(upPos.Y - _mouseDownPos.Y);
-                    if (durationMs is >= 140 and <= 8000 && dx >= 18 && dy <= 240)
-                    {
-                        var fg = NativeMethods.GetForegroundWindow();
-                        if (fg != 0 && NativeMethods.GetWindowThreadProcessId(fg, out var pid) != 0 && pid != (uint)Environment.ProcessId)
-                        {
-                            _ = Task.Run(async () =>
-                            {
-                                var captured = await TryCaptureSelectedTextAsync().ConfigureAwait(false);
-                                if (captured is not null && !string.IsNullOrWhiteSpace(captured.Text))
-                                    MouseSelectionCaptured?.Invoke(this, captured);
-                            });
-                        }
-                    }
-                }
-            }
-            else
-            {
-                _wasLeftButtonDown = false;
-            }
         }
         catch
         {
         }
     }
 
-    private static void SendCtrlC()
+    private static bool SendCtrlC()
     {
         const ushort VkControl = 0x11;
         const ushort VkC = 0x43;
@@ -291,7 +356,7 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
             new() { Type = InputKeyboard, Data = new() { Keyboard = new() { Vk = VkC, Flags = KeyeventfKeyup } } },
             new() { Type = InputKeyboard, Data = new() { Keyboard = new() { Vk = VkControl, Flags = KeyeventfKeyup } } }
         };
-        NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.Input>());
+        return NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.Input>()) == inputs.Length;
     }
 
     public static string? TryReadClipboardUnicodeText()
@@ -300,17 +365,7 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
         {
             if (NativeMethods.OpenClipboard(0))
             {
-                try
-                {
-                    if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CfUnicodeText))
-                        return null;
-                    var handle = NativeMethods.GetClipboardData(NativeMethods.CfUnicodeText);
-                    if (handle == 0) return null;
-                    var ptr = NativeMethods.GlobalLock(handle);
-                    if (ptr == 0) return null;
-                    try { return Marshal.PtrToStringUni(ptr); }
-                    finally { NativeMethods.GlobalUnlock(handle); }
-                }
+                try { return ReadOpenClipboardText(); }
                 finally { NativeMethods.CloseClipboard(); }
             }
             Thread.Sleep(10);
@@ -349,70 +404,22 @@ public sealed class WindowsDesktopPlatformService : IDesktopPlatformService
         }
     }
 
-    /// <summary>Snapshots every clipboard format (not just text) so <see cref="TryRestoreClipboard"/> can put back
-    /// whatever the user actually had on the clipboard, instead of only restoring Unicode text.</summary>
-    private static List<(uint Format, byte[] Data)>? TrySnapshotClipboard()
+    private static string? ReadOpenClipboardText()
     {
-        for (var attempt = 0; attempt < 5; attempt++)
+        if (!NativeMethods.IsClipboardFormatAvailable(NativeMethods.CfUnicodeText)) return null;
+        var handle = NativeMethods.GetClipboardData(NativeMethods.CfUnicodeText);
+        if (handle == 0) return null;
+        var size = NativeMethods.GlobalSize(handle);
+        if (size < 2 || size > int.MaxValue) return null;
+        var ptr = NativeMethods.GlobalLock(handle);
+        if (ptr == 0) return null;
+        try
         {
-            if (NativeMethods.OpenClipboard(0))
-            {
-                try
-                {
-                    var snapshot = new List<(uint, byte[])>();
-                    uint format = 0;
-                    while ((format = NativeMethods.EnumClipboardFormats(format)) != 0)
-                    {
-                        var handle = NativeMethods.GetClipboardData(format);
-                        if (handle == 0) continue;
-                        var size = NativeMethods.GlobalSize(handle);
-                        if (size == 0 || size > int.MaxValue) continue;
-                        var ptr = NativeMethods.GlobalLock(handle);
-                        if (ptr == 0) continue;
-                        try
-                        {
-                            var data = new byte[(int)size];
-                            Marshal.Copy(ptr, data, 0, data.Length);
-                            snapshot.Add((format, data));
-                        }
-                        finally { NativeMethods.GlobalUnlock(handle); }
-                    }
-                    return snapshot;
-                }
-                finally { NativeMethods.CloseClipboard(); }
-            }
-            Thread.Sleep(10);
+            var text = Marshal.PtrToStringUni(ptr, (int)size / 2);
+            var end = text.IndexOf('\0');
+            return end < 0 ? text : text[..end];
         }
-        return null;
-    }
-
-    private static void TryRestoreClipboard(List<(uint Format, byte[] Data)> snapshot)
-    {
-        const uint GmemMoveable = 0x0002;
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            if (NativeMethods.OpenClipboard(0))
-            {
-                try
-                {
-                    NativeMethods.EmptyClipboard();
-                    foreach (var (format, data) in snapshot)
-                    {
-                        var hGlobal = NativeMethods.GlobalAlloc(GmemMoveable, (nuint)data.Length);
-                        if (hGlobal == 0) continue;
-                        var target = NativeMethods.GlobalLock(hGlobal);
-                        if (target == 0) { NativeMethods.GlobalFree(hGlobal); continue; }
-                        try { Marshal.Copy(data, 0, target, data.Length); }
-                        finally { NativeMethods.GlobalUnlock(hGlobal); }
-                        if (NativeMethods.SetClipboardData(format, hGlobal) == 0)
-                            NativeMethods.GlobalFree(hGlobal);
-                    }
-                    return;
-                }
-                finally { NativeMethods.CloseClipboard(); }
-            }
-            Thread.Sleep(10);
-        }
+        finally { NativeMethods.GlobalUnlock(handle); }
     }
 
     private static DisplayFrame CaptureDisplay(DisplayInfo display)

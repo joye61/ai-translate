@@ -50,6 +50,7 @@ public interface IVocabularyService
     IReadOnlyList<VocabularyEntry> GetDueQueue(string? notebookId = null, int maxCount = 50, DateTimeOffset? now = null);
     VocabularyEntry? FindByHeadword(string headword);
     bool IsCollected(DictionaryEntryResult result, string notebookId);
+    void CompleteCollection(VocabularyEntry collected, DictionaryEntryResult result, long revision);
     void RemoveFromNotebook(DictionaryEntryResult result, string notebookId);
     VocabularyDashboardStats GetDashboardStats(DateTimeOffset? now = null);
 
@@ -67,7 +68,7 @@ public interface IVocabularyService
     VocabularyEntry SaveEntry(VocabularyEntry entry);
     void ToggleStar(string entryId);
     void DeleteEntry(string entryId);
-    VocabularyEntry SubmitReview(string entryId, ReviewRating rating, ReviewQuizMode quizMode = ReviewQuizMode.Flashcard, int durationMs = 1500, DateTimeOffset? now = null);
+    VocabularyEntry SubmitReview(string entryId, ReviewRating rating, int durationMs = 1500, DateTimeOffset? now = null);
 
     string ExportToMarkdown(VocabularyQueryFilter? filter = null);
     string ExportToAnkiTsv(VocabularyQueryFilter? filter = null);

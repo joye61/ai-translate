@@ -66,6 +66,8 @@ public interface IDesktopPlatformService : IDisposable
 
     event EventHandler<CapturedTextEvent>? ClipboardTextChanged;
     event EventHandler<CapturedTextEvent>? MouseSelectionCaptured;
+    // Optional global pointer notification for dismissing a popup that never took focus.
+    event Action<PointD>? PointerPressed { add { } remove { } }
 
     bool IsClipboardMonitoringEnabled { get; set; }
     bool IsMouseSelectionMonitoringEnabled { get; set; }

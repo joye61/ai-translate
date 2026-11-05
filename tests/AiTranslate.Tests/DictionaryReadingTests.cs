@@ -8,6 +8,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using Xunit;
@@ -58,7 +59,7 @@ public sealed class DictionaryReadingTests
 
                 string[] Render(VocabularyEntry entry)
                 {
-                    var details = new DictionaryDetails(speech, settings, (_, _, _) => { }, _ => { });
+                    var details = new DictionaryDetails(speech, settings, (_, _, _) => { });
                     details.ShowEntry(entry.ToDictionaryResult(), complete: true);
                     var window = new Window { Content = new ScrollViewer { Content = details } };
                     window.Show();
@@ -89,7 +90,7 @@ public sealed class DictionaryReadingTests
                 using var speech = new KokoroSpeechService(directory.FullName);
                 var settings = new AppSettingsStore(Path.Combine(directory.FullName, "settings.json"));
                 var opened = new List<(string Text, string Context)>();
-                var details = new DictionaryDetails(speech, settings, (text, context, _) => opened.Add((text, context)), _ => { });
+                var details = new DictionaryDetails(speech, settings, (text, context, _) => opened.Add((text, context)));
                 var window = new Window { Width = 420, Height = 560, Content = new ScrollViewer { Content = details } };
                 window.Show();
                 try
@@ -110,6 +111,60 @@ public sealed class DictionaryReadingTests
             }, CancellationToken.None);
         }
         finally { directory.Delete(true); }
+    }
+
+    [Fact]
+    public async Task LocalSelectionProtectionPreservesTheSelectionAndOnlyFiltersInjectedCopy()
+    {
+        await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
+        await session.Dispatch(async () =>
+        {
+            var text = TextStyles.Selectable("literature review", TextRole.Body);
+            text.Background = Avalonia.Media.Brushes.Transparent;
+            var editor = new TextBox { Text = "editable words" };
+            var panel = new StackPanel { Background = AppTheme.WindowBg, Children = { text, editor } };
+            var window = new Window { Width = 340, Height = 200, Content = panel };
+            var gestures = new List<Window?>();
+            var injected = true;
+            using var privacy = new WindowsSelectionPrivacy(gestures.Add, () => injected);
+            window.Show();
+            try
+            {
+                window.UpdateLayout();
+                window.MouseDown(new Point(5, 160), MouseButton.Left);
+                window.MouseUp(new Point(5, 160), MouseButton.Left);
+                Assert.Empty(gestures);
+                var start = text.TextLayout.HitTestTextRange(0, 1).First().Center;
+                var end = text.TextLayout.HitTestTextRange(8, 1).First().Center;
+                window.MouseDown(start, MouseButton.Left);
+                window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+                window.MouseUp(end, MouseButton.Left);
+                Assert.Equal([window, null], gestures);
+                Assert.False(string.IsNullOrWhiteSpace(text.SelectedText));
+                var clipboard = window.Clipboard!;
+                foreach (var control in new Control[] { text, editor })
+                {
+                    control.Focus();
+                    if (control == editor) editor.SelectAll();
+                    else text.SelectAll();
+                    await clipboard.SetTextAsync("previous copy");
+                    injected = true;
+                    PressCopy();
+                    Assert.Equal("previous copy", await clipboard.TryGetTextAsync());
+                    injected = false;
+                    PressCopy();
+                    Assert.Equal(control == editor ? editor.Text : text.Text, await clipboard.TryGetTextAsync());
+                }
+
+                void PressCopy()
+                {
+                    window.KeyPressQwerty(PhysicalKey.C, RawInputModifiers.Control);
+                    window.KeyReleaseQwerty(PhysicalKey.C, RawInputModifiers.Control);
+                }
+            }
+            finally { window.Close(); }
+            return true;
+        }, CancellationToken.None);
     }
 
     [Fact]
@@ -175,6 +230,50 @@ public sealed class DictionaryReadingTests
                 Click(blank);
                 Assert.Equal("", editor.SelectedText);
                 Assert.Equal("editable text", editor.Text);
+            }
+            finally { window.Close(); }
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task WrappedPassageLinksOnlyItsTermsAndLeavesOrdinaryTextSelectable()
+    {
+        await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
+        await session.Dispatch(() =>
+        {
+            const string target = "请先检查运行时设置，再验证命令是否正确。\n如果运行时出错，请检查日志。";
+            var entry = new DictionaryEntryResult
+            {
+                SourceText = "Check the runtime settings.", PrimaryTranslation = target, ItemType = VocabularyItemType.Paragraph,
+                Collocations = [new("runtime", "运行时"), new("run", "运行"), new("invalid", target)]
+            };
+            var queries = new List<(string, string)>();
+            var reader = DictionaryReadingText.Primary(entry, (term, context) => queries.Add((term, context)));
+            var window = new Window { Content = reader, Width = 160, Height = 320 };
+            window.Show();
+            try
+            {
+                window.UpdateLayout();
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                var links = reader.Inlines!.OfType<Run>().Where(r => r.TextDecorations?.Count > 0).ToArray();
+                Assert.Equal(["运行时", "运行时"], links.Select(r => r.Text));
+                void ClickAt(int index)
+                {
+                    var local = reader.TextLayout.HitTestTextRange(index, 1).First().Center;
+                    var point = reader.TranslatePoint(local, window)!.Value;
+                    window.MouseDown(point, MouseButton.Left);
+                    window.MouseUp(point, MouseButton.Left);
+                }
+                ClickAt(0);
+                Assert.Empty(queries);
+                ClickAt(target.LastIndexOf("运行时", StringComparison.Ordinal) + 1);
+                Assert.Equal(("运行时", "如果运行时出错，请检查日志。"), Assert.Single(queries));
+                reader.SelectAll();
+                Assert.Equal(target, reader.SelectedText);
+
+                var plain = DictionaryReadingText.Primary(entry with { Collocations = [] }, (_, _) => { });
+                Assert.False(plain.HasLinkedTerms);
+                Assert.True(plain.TextDecorations is null or { Count: 0 });
             }
             finally { window.Close(); }
         }, CancellationToken.None);

@@ -126,7 +126,7 @@ public sealed class MainWindow : Window
                     _dictionaryView!.DisplayResult(result, captured.Source, captured.SourceWindowTitle);
                     if (translation is not null) _dictionaryView.LookupRelated(translation, context ?? "", fromTranslation: true);
                 });
-            });
+            }, _platform);
 
         // Instantiate modular Views
         _dictionaryView = new DictionaryStudioView(
@@ -171,7 +171,7 @@ public sealed class MainWindow : Window
 
         _navDictBtn = CreateNavButton("translate", "查词与翻译", 0);
         _navVocabBtn = CreateNavButton("book-open-page-variant", "生词本", 1);
-        _navReviewBtn = CreateNavButton("brain", "复习训练", 2);
+        _navReviewBtn = CreateNavButton("brain", "生词复习", 2);
         _navSettingsBtn = CreateNavButton("cog-outline", "引擎与快捷键", 3);
 
         _dueBadgeText = new TextBlock { Text = "0", FontSize = 11, FontWeight = FontWeight.Bold, Foreground = Brushes.White };
@@ -491,7 +491,8 @@ public sealed class MainWindow : Window
     {
         var s = _settingsStore.Current;
         _platform.TryRegisterHotkey(GlobalHotkeyId.ShowMainWindow, s.ShowWindowHotkey, () => Dispatcher.UIThread.Post(ShowAndActivate), out _);
-        _platform.TryRegisterHotkey(GlobalHotkeyId.SelectionTranslate, s.SelectionTranslateHotkey, () => _ = TriggerSelectionHotkeyAsync(), out _);
+        _platform.TryRegisterHotkey(GlobalHotkeyId.SelectionTranslate, s.SelectionTranslateHotkey,
+            () => Dispatcher.UIThread.Post(() => _ = TriggerSelectionHotkeyAsync()), out _);
         _platform.TryRegisterHotkey(GlobalHotkeyId.ScreenshotTranslate, s.ScreenshotTranslateHotkey, () => _ = _screenshotCoordinator.StartCaptureAndTranslateAsync(), out _);
         _platform.TryRegisterHotkey(GlobalHotkeyId.ClipboardTranslate, s.ClipboardTranslateHotkey, () => _ = TranslateClipboardNowAsync(), out _);
     }
@@ -499,7 +500,7 @@ public sealed class MainWindow : Window
     private async Task TriggerSelectionHotkeyAsync()
     {
         var captured = await _platform.TryCaptureSelectedTextAsync();
-        if (captured is not null && !string.IsNullOrWhiteSpace(captured.Text))
+        if (captured is not null && DictionaryQuery.HasContent(captured.Text))
         {
             await _selectionPopup.ShowAndTranslateAsync(captured);
             return;
@@ -517,14 +518,14 @@ public sealed class MainWindow : Window
             text = await Clipboard.TryGetTextAsync();
         if (string.IsNullOrWhiteSpace(text) && OperatingSystem.IsWindows())
             text = WindowsDesktopPlatformService.TryReadClipboardUnicodeText();
-        if (string.IsNullOrWhiteSpace(text))
+        if (!DictionaryQuery.HasContent(text))
         {
             SetStatus("当前剪贴板中没有可翻译的文本内容。");
             return;
         }
         ShowAndActivate();
         SwitchTab(0);
-        await _dictionaryView.LookupAsync(text.Trim(), null, TranslationTriggerSource.ClipboardMonitor, "剪贴板读取");
+        await _dictionaryView.LookupAsync(text, null, TranslationTriggerSource.ClipboardMonitor, "剪贴板读取");
     }
 
     public void ShowAndActivate()

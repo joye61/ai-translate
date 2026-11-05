@@ -20,6 +20,8 @@ internal sealed class HotkeyPumpThread : IDisposable
     private readonly Thread _thread;
     private bool _disposed;
     private bool _stop;
+    private nint _mouseHook;
+    private NativeMethods.MouseHook? _mouseCallback;
 
     internal HotkeyPumpThread()
     {
@@ -86,6 +88,34 @@ internal sealed class HotkeyPumpThread : IDisposable
         command.Completion.Task.GetAwaiter().GetResult();
     }
 
+    internal void SetMouseHook(NativeMethods.MouseHook? callback, bool renew = false)
+    {
+        var command = new Command(() =>
+        {
+            if (callback is null || renew)
+            {
+                // Windows can silently remove a timed-out low-level hook.
+                const int invalidHookHandle = 1404;
+                if (_mouseHook != 0 && (NativeMethods.UnhookWindowsHookEx(_mouseHook) ||
+                    Marshal.GetLastWin32Error() == invalidHookHandle)) _mouseHook = 0;
+                if (_mouseHook == 0) _mouseCallback = null;
+            }
+            if (callback is not null && _mouseHook == 0)
+            {
+                _mouseCallback = callback;
+                _mouseHook = NativeMethods.SetWindowsHookEx(14 /* WH_MOUSE_LL */, callback, 0, 0);
+            }
+            return new(callback is null || _mouseHook != 0, null);
+        });
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _commands.Enqueue(command);
+            _workSignal.Set();
+        }
+        command.Completion.Task.GetAwaiter().GetResult();
+    }
+
     private void Run()
     {
         try
@@ -122,6 +152,8 @@ internal sealed class HotkeyPumpThread : IDisposable
         }
         finally
         {
+            if (_mouseHook != 0) NativeMethods.UnhookWindowsHookEx(_mouseHook);
+            GC.KeepAlive(_mouseCallback);
             foreach (var id in _callbacks.Keys)
                 NativeMethods.UnregisterHotKey(0, id);
             _callbacks.Clear();

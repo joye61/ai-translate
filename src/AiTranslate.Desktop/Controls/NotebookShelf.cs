@@ -21,7 +21,8 @@ internal sealed class NotebookShelf : UserControl
     internal NotebookShelf(Action<string?> select, Action create, Action edit, Action overview)
     {
         _select = select;
-        var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var inset = AppTheme.ScrollContentInset;
+        var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = inset };
         heading.Children.Add(new TextBlock
         {
             Text = "我的词本", FontWeight = FontWeight.SemiBold, FontSize = AppTheme.Type.BodyLarge,
@@ -31,21 +32,22 @@ internal sealed class NotebookShelf : UserControl
         Grid.SetColumn(add, 1);
         heading.Children.Add(add);
         AutomationProperties.SetName(_search, "查找词本");
+        _search.Margin = inset;
         _search.TextChanged += (_, _) => Render();
         _edit = StudioUi.CreateCompactButton("pencil-outline", "编辑当前词本", edit);
         var footer = new StackPanel
         {
-            [Grid.RowProperty] = 3, Spacing = AppTheme.Space.XXS,
+            [Grid.RowProperty] = 3, Spacing = AppTheme.Space.XXS, Margin = inset,
             Children = { _edit, StudioUi.CreateCompactButton("chart-timeline-variant", "学习概览", overview) }
         };
         var panel = new Grid
         {
             RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
             RowSpacing = AppTheme.Space.M,
-            Children = { heading, _search, new ScrollViewer { [Grid.RowProperty] = 2, Content = _books }, footer }
+            Children = { heading, _search, new ScrollViewer { [Grid.RowProperty] = 2, Content = _books, Padding = inset }, footer }
         };
         Grid.SetRow(_search, 1);
-        Content = StudioUi.CreateBentoCard(panel, new Thickness(AppTheme.Space.M));
+        Content = StudioUi.CreateBentoCard(panel, new Thickness(0, AppTheme.Space.M));
     }
 
     internal void Display(IReadOnlyList<VocabularyNotebook> notebooks, VocabularyDashboardStats stats, string? selectedId)

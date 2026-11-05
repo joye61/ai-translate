@@ -131,6 +131,7 @@ public sealed class LinuxDesktopPlatformService : IDesktopPlatformService
             if (IsMouseSelectionMonitoringEnabled)
             {
                 var primary = ReadLinuxPrimarySelection()?.Trim();
+                if (string.IsNullOrEmpty(primary)) _lastPrimarySelectionText = "";
                 if (!string.IsNullOrWhiteSpace(primary) && primary.Length <= 4000 && !string.Equals(primary, _lastPrimarySelectionText, StringComparison.Ordinal))
                 {
                     _lastPrimarySelectionText = primary;

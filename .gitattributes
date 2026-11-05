@@ -1,0 +1,4 @@
+# Preserve the bytes pinned by the bundled OCR manifest on every checkout.
+/src/AiTranslate.Ocr/Models/*.onnx binary
+/src/AiTranslate.Ocr/Models/*.yml text eol=lf
+/src/AiTranslate.Ocr/Models/keys.txt text eol=lf

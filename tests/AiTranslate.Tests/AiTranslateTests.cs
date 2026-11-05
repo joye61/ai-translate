@@ -411,6 +411,8 @@ public sealed class AiDictionaryServiceTests
     {
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
+            if (JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!["senses"] is not null)
+                return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));
             foreach (var character in prefix) onText(character.ToString());
             beforeDetails();
             onText(rest);
@@ -475,36 +477,46 @@ public sealed class AiDictionaryServiceTests
     }
 
     [Theory]
+    [InlineData("{\"primaryTranslation\":\"检", "验\"}", "primary", "检")]
     [InlineData("{\"senses\":[{\"partOfSpeech\":\"n.\",\"definitionZh\":\"医学检", "查\"}],\"primaryTranslation\":\"检验\"}", "sense", "医学检")]
     [InlineData("{\"primaryTranslation\":\"检验\",\"senses\":[{\"definitionZh\":\"检验\",\"example\":{\"sourceSentence\":\"They te", "st it.\",\"translatedSentence\":\"他们检验它。\"}}]}", "senseExample", "They te")]
     [InlineData("{\"primaryTranslation\":\"检验\",\"collocations\":[{\"phrase\":\"run a test\",\"example\":{\"sourceSentence\":\"Run it.\",\"translatedSentence\":\"运行", "测试。\"}}]}", "pairExample", "运行")]
     [InlineData("{\"primaryTranslation\":\"检验\",\"examples\":[{\"sourceSentence\":\"Say \\\"test\\\" \\uD83D\\uDE00 \\u4E", "2D\",\"translatedSentence\":\"说测试。\"}]}", "example", "Say \"test\" 😀 ")]
     [InlineData("{\"primaryTranslation\":\"检验\",\"usageNotes\":\"用于", "医学。\"}", "notes", "用于")]
+    [InlineData("{\"primaryTranslation\":\"检验\",\"literalTranslation\":\"将其置于", "考验之下\"}", "literal", "将其置于")]
     public async Task PreviewProjectsUnfinishedTextBeforeTheProviderContinues(string prefix, string rest, string section, string expected)
     {
         DictionaryEntryResult? snapshot = null;
+        DictionaryEntryResult? usable = null;
         // One real SSE delta can end inside any field, including an escaped Unicode character.
         var transport = new PausedDictionaryReply(prefix, rest, () =>
         {
             Assert.NotNull(snapshot);
             var visible = section switch
             {
+                "primary" => snapshot.PrimaryTranslation,
                 "sense" => Assert.Single(snapshot.Senses).DefinitionZh,
                 "senseExample" => Assert.Single(snapshot.Senses).Example?.SourceSentence,
                 "pairExample" => Assert.Single(snapshot.Collocations).Example?.TranslatedSentence,
                 "example" => Assert.Single(snapshot.Examples).SourceSentence,
+                "literal" => snapshot.LiteralTranslation,
                 _ => snapshot.UsageNotes
             };
             Assert.Equal(expected, visible);
+            Assert.Equal(section is "sense" or "primary" ? null : "检验", usable?.PrimaryTranslation);
         });
-        var result = await new AiDictionaryService(() => transport).LookupOrTranslateAsync("test", "zh-Hans", onEntryPreview: s => snapshot = s);
+        var result = await new AiDictionaryService(() => transport).LookupOrTranslateAsync("test", "zh-Hans",
+            onEntryPreview: s => snapshot = s, onUsableEntry: entry => usable = entry);
         Assert.Equal("检验", result.PrimaryTranslation);
+        Assert.Equal(result.PrimaryTranslation, usable?.PrimaryTranslation);
     }
 
     private sealed class PausedDictionaryReply(string first, string last, Action inspect) : IAiTransport
     {
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
+            if (JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!["senses"] is not null)
+                return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));
             onText(first);
             inspect();
             onText(last);

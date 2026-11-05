@@ -1,11 +1,15 @@
+using AiTranslate.Ai;
 using AiTranslate.Core;
 using AiTranslate.Desktop;
 using AiTranslate.Desktop.Controls;
+using AiTranslate.Desktop.Tray;
 using AiTranslate.Desktop.Views;
 using AiTranslate.Speech;
 using AiTranslate.Vocabulary;
+using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -17,6 +21,41 @@ namespace AiTranslate.Tests;
 [Collection("Dictionary UI")]
 public sealed class NotebookManagementTests
 {
+    [Fact]
+    public async Task LookingUpCollectedCoffeeCanRefreshTheNotebookWithATrayIcon()
+    {
+        await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
+        var directory = Directory.CreateTempSubdirectory();
+        try
+        {
+            await session.Dispatch(async () =>
+            {
+                var store = new VocabularyService(Path.Combine(directory.FullName, "words.json"));
+                var settings = new AppSettingsStore(Path.Combine(directory.FullName, "settings.json"));
+                var dictionary = new AiDictionaryService(() => null, new DictionaryEntryCache(Path.Combine(directory.FullName, "cache.db")),
+                    refreshCollectedEntries: store.RefreshCollectedEntries);
+                var coffee = await dictionary.LookupOrTranslateAsync("coffee", "zh-Hans");
+                var stamp = coffee.CacheStamp!;
+                var card = store.AddOrUpdateFromDictionary(coffee with { CacheStamp = stamp with { Revision = stamp.Revision - 1 } });
+
+                static void Ignore() { }
+                using var tray = new SystemTrayService(settings, store, Ignore, Ignore, Ignore, Ignore, Ignore, Ignore, Ignore);
+                var result = await dictionary.LookupOrTranslateAsync("coffee", "zh-Hans");
+                Assert.Equal(DictionaryResultOrigin.Cache, result.Origin);
+                Assert.Equal(stamp.Revision, store.FindByHeadword("coffee")!.DictionaryRevision);
+
+                var icon = Assert.Single(TrayIcon.GetIcons(Application.Current!)!);
+                var previousTip = icon.ToolTipText;
+                await Task.Run(() => store.SubmitReview(card.Id, ReviewRating.Good));
+                Dispatcher.UIThread.RunJobs();
+                Assert.NotEqual(previousTip, icon.ToolTipText);
+                Assert.Contains(store.GetDashboardStats().DueTodayCount.ToString(), icon.ToolTipText);
+                return true;
+            }, CancellationToken.None);
+        }
+        finally { directory.Delete(recursive: true); }
+    }
+
     [Fact]
     public void MovingAndDeletingBooksPreservesNotesAndReviewStateAfterRestart()
     {
@@ -56,6 +95,54 @@ public sealed class NotebookManagementTests
     }
 
     [Fact]
+    public async Task ReviewOpensWithTheMeaningAndRecordsOnlyAnExplicitRating()
+    {
+        await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
+        var directory = Directory.CreateTempSubdirectory();
+        try
+        {
+            await session.Dispatch(() =>
+            {
+                var path = Path.Combine(directory.FullName, "words.json");
+                var store = new VocabularyService(path);
+                var book = store.CreateNotebook("阅读", "");
+                var entry = store.AddOrUpdateFromDictionary(new DictionaryEntryResult
+                {
+                    SourceText = "good", PrimaryTranslation = "好的", DetectedSourceLanguage = "en"
+                }, book.Id, contextSentence: "She is good at drawing.");
+                using var speech = new KokoroSpeechService(directory.FullName);
+                var review = new FsrsReviewArenaView(store, speech, new AppSettingsStore(Path.Combine(directory.FullName, "settings.json")), _ => { });
+                var window = new Window { Content = review, Width = 788, Height = 560 };
+                window.Show();
+                try
+                {
+                    review.RefreshDecksAndStart(book.Id);
+                    window.UpdateLayout();
+                    var texts = review.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToArray();
+                    Assert.Contains(entry.Headword, texts);
+                    Assert.Contains(entry.Translation, texts);
+                    Assert.Contains(entry.ContextSentence, texts);
+                    Assert.Empty(review.GetVisualDescendants().OfType<TextBox>());
+                    Assert.Equal(0, store.QueryEntries(new() { NotebookId = book.Id }).Single().TotalReviews);
+                    var ratings = review.GetVisualDescendants().OfType<Button>()
+                        .Where(b => AutomationProperties.GetName(b)?.Contains("，下次") == true).ToArray();
+                    Assert.Equal(4, ratings.Length);
+                    ratings.Single(b => AutomationProperties.GetName(b)!.StartsWith(UiLabels.Rating(ReviewRating.Good)))
+                        .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    window.UpdateLayout();
+                    Assert.Contains(review.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "本轮复习已完成");
+                    var saved = new VocabularyService(path).QueryEntries(new() { NotebookId = book.Id }).Single();
+                    Assert.Equal(1, saved.TotalReviews);
+                    Assert.True(saved.NextReviewAt > saved.LastReviewedAt);
+                    Assert.Equal(entry.ContextSentence, saved.ContextSentence);
+                }
+                finally { window.Close(); }
+            }, CancellationToken.None);
+        }
+        finally { directory.Delete(true); }
+    }
+
+    [Fact]
     public async Task SelectedNotebookScopesTheListSearchCollectionAndReview()
     {
         await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
@@ -87,7 +174,21 @@ public sealed class NotebookManagementTests
                     service.UpdateEntryDetails(entry.Id, book.Id, entry.ItemType, entry.Translation, [], "测试注释");
                     view.RefreshAll();
                     Layout();
+                    var entries = view.GetVisualDescendants().OfType<ScrollViewer>().Single(s => s.Content is ItemsControl);
+                    var list = (ItemsControl)entries.Content!;
+                    var card = entries.GetVisualAncestors().OfType<Border>().First();
+                    var bar = entries.GetVisualDescendants().OfType<ScrollBar>().Single(b => b.Name == "PART_VerticalScrollBar");
+                    Assert.True(bar.IsVisible);
+                    var left = list.TranslatePoint(default, card)!.Value.X;
+                    var right = left + list.Bounds.Width;
+                    var track = bar.TranslatePoint(default, card)!.Value.X;
+                    Assert.Equal(left, card.Bounds.Width - right);
+                    Assert.True(right <= track);
+                    Assert.Equal(card.Bounds.Width - card.BorderThickness.Right, track + bar.Bounds.Width);
                     Click($"{book.Name}，1 条");
+                    Assert.False(bar.IsVisible);
+                    Assert.Equal(left, list.TranslatePoint(default, card)!.Value.X);
+                    Assert.Equal(right - left, list.Bounds.Width);
                     Assert.True(view.GetVisualDescendants().OfType<ItemsControl>().Single(c => c.ItemTemplate?.Match(entry) == true).Bounds.Width
                         > view.GetVisualDescendants().OfType<NotebookShelf>().Single().Bounds.Width);
                     var rows = view.GetVisualDescendants().OfType<Button>().Where(b => AutomationProperties.GetName(b)?.StartsWith("查看词条 ") == true);

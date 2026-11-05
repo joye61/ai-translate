@@ -26,13 +26,6 @@ public enum ReviewRating
     Easy = 4   // 熟练 / 简单
 }
 
-public enum ReviewQuizMode
-{
-    Flashcard = 0,
-    ClozeContext = 1,
-    SpellingDictation = 2
-}
-
 public sealed record PartOfSpeechSense(
     string PartOfSpeech,
     string DefinitionZh,
@@ -288,13 +281,18 @@ public sealed record ReviewLogRecord(
     string Id,
     string EntryId,
     ReviewRating Rating,
-    ReviewQuizMode QuizMode,
     MemoryStage PreviousStage,
     MemoryStage NewStage,
     double PreviousStability,
     double NewStability,
     int DurationMs,
-    DateTimeOffset ReviewedAt);
+    DateTimeOffset ReviewedAt)
+{
+    // Round-trip the mode on historical reviews. New reading ratings have no mode.
+    [System.Text.Json.Serialization.JsonPropertyName("quizMode")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacyQuizMode { get; init; }
+}
 
 /// <summary>
 /// FSRS-inspired Spaced Repetition Scheduler with previewable intervals for Again / Hard / Good / Easy.

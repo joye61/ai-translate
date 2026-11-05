@@ -1,14 +1,92 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using AiTranslate.Ai;
 using AiTranslate.Core;
 using AiTranslate.Vocabulary;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace AiTranslate.Tests;
 
 public sealed class DictionaryCacheTests
 {
+    [Fact]
+    public async Task SuggestionsUseCompatibleStandaloneHistoryAndNeverOpenATransport()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var cache = new DictionaryEntryCache(Path.Combine(dir.FullName, "cache.sqlite3"));
+            var reader = "zh-Hans";
+            IReadOnlyList<CollocationItem> terms = [];
+            var online = new AiDictionaryService(() => new Reply("好"), cache, (_, _) => terms, readerLanguageId: () => reader);
+            await online.LookupOrTranslateAsync("go", "auto");
+            await online.LookupOrTranslateAsync("gone", "auto");
+            await online.LookupOrTranslateAsync("good", "auto");
+            await online.LookupOrTranslateAsync("goodness", "auto");
+            await online.LookupOrTranslateAsync("got", "auto", "We got home.");
+            await online.LookupOrTranslateAsync("gold", "fr");
+            await online.LookupOrTranslateAsync("输入法", "auto");
+
+            var local = new AiDictionaryService(() => throw new InvalidOperationException("Unexpected transport"), cache,
+                (_, _) => terms, readerLanguageId: () => reader);
+            Task<string?> Suggest(string prefix, string mode = "auto") => local.FindSuggestionAsync(prefix, mode, default);
+            Assert.Equal("good", await Suggest("go"));
+            Assert.Equal("gone", await Suggest("gon"));
+            Assert.Equal("gold", await Suggest("go", "fr"));
+            Assert.Equal("输入法", await Suggest("输"));
+            Assert.Null(await Suggest("GO"));
+            Assert.Null(await Suggest("got"));
+            Assert.Null(await Suggest("seren")); // The built-in lexicon is not history.
+            Assert.Equal(DictionaryResultOrigin.Cache, (await local.LookupOrTranslateAsync("good", "auto", cacheOnly: true)).Origin);
+            terms = [new("go", "走")];
+            Assert.Null(await Suggest("go"));
+            await Assert.ThrowsAsync<AiException>(() => local.LookupOrTranslateAsync("good", "auto", cacheOnly: true));
+            terms = [];
+            reader = "ja";
+            Assert.Null(await Suggest("go"));
+        }
+        finally { dir.Delete(true); }
+    }
+
+    [Fact]
+    public async Task LegacyHistoryGetsIndexedAndMetacharactersRemainLiteral()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            const string source = "100%_ready";
+            var key = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+                new { schema = 3, source, target = "zh-Hans", contextSentence = "", terms = Array.Empty<CollocationItem>() })));
+            var path = Path.Combine(dir.FullName, "old.sqlite3");
+            using (var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+            {
+                db.Open();
+                using var cmd = db.CreateCommand();
+                cmd.CommandText = """
+                    CREATE TABLE dictionary(cache_key TEXT PRIMARY KEY, entry TEXT NOT NULL, request_ticks INTEGER NOT NULL) WITHOUT ROWID;
+                    INSERT INTO dictionary VALUES($key, $json, 1), ('broken', '{bad', 9);
+                    """;
+                cmd.Parameters.AddWithValue("$key", key);
+                cmd.Parameters.AddWithValue("$json", JsonSerializer.Serialize(new DictionaryEntryResult { SourceText = source, PrimaryTranslation = "就绪" }));
+                cmd.ExecuteNonQuery();
+            }
+            var cache = new DictionaryEntryCache(path);
+            var offline = new AiDictionaryService(() => throw new InvalidOperationException("Unexpected transport"), cache,
+                readerLanguageId: () => "zh-Hans");
+            Assert.Equal(source, await offline.FindSuggestionAsync("100%_", "auto", default));
+            Assert.Null(await offline.FindSuggestionAsync("100_", "auto", default));
+            Assert.Equal("就绪", (await offline.LookupOrTranslateAsync(source, "auto", cacheOnly: true)).PrimaryTranslation);
+            Assert.Empty(cache.FindCompletions(source, null, "zh-Hans", default));
+            Assert.True(cache.Write(key, new() { SourceText = "replacement", PrimaryTranslation = "替换" }, 2));
+            Assert.False(cache.Write(key, new() { SourceText = source, PrimaryTranslation = "旧" }, 1));
+            Assert.Empty(cache.FindCompletions("100", null, "zh-Hans", default));
+            Assert.Equal("replacement", Assert.Single(cache.FindCompletions("rep", null, "zh-Hans", default)).Source);
+        }
+        finally { dir.Delete(true); }
+    }
+
     [Fact]
     public async Task ReadersKeepSeparateExplanationsForTheSameLanguagePair()
     {
@@ -62,6 +140,8 @@ public sealed class DictionaryCacheTests
         public int Calls;
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
+            if (JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!["senses"] is not null)
+                return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));
             Interlocked.Increment(ref Calls);
             Started.TrySetResult();
             return Finish.Task.WaitAsync(token);
@@ -76,7 +156,8 @@ public sealed class DictionaryCacheTests
         {
             var path = Path.Combine(dir.FullName, "cache.sqlite3");
             AiDictionaryService Service(string translation) => new(() => new Reply(translation), new DictionaryEntryCache(path));
-            var first = await Service("河岸").LookupOrTranslateAsync("bank", "zh-Hans", "We sat by the water.");
+            var first = await Service("河岸").LookupOrTranslateAsync(" ✨“bank,” ", "zh-Hans", "We sat by the water.");
+            Assert.Equal("bank", first.SourceText);
             Assert.Equal("日常 · 地理", first.Senses[0].Scenario);
             Assert.Equal("bank on sth", first.Senses[0].GrammarPattern);
             var offline = new AiDictionaryService(() => null, new DictionaryEntryCache(path));
@@ -146,16 +227,20 @@ public sealed class DictionaryCacheTests
         try
         {
             var cache = new DictionaryEntryCache(Path.Combine(dir.FullName, "cache.sqlite3"));
-            var service = new AiDictionaryService(() => new Reply("tomorrow", payload =>
-                Assert.Equal("en", payload["target_language"]?.GetValue<string>())), cache, (_, target) =>
+            var service = new AiDictionaryService(() => new Reply("demain", payload =>
             {
-                Assert.Equal("en", target);
+                Assert.Equal("fr", payload["reader_language"]?.GetValue<string>());
+                Assert.Equal("fr", payload["target_language"]?.GetValue<string>());
+            }), cache, (_, target) =>
+            {
+                Assert.Equal("fr", target);
                 return [];
-            });
+            }, readerLanguageId: () => "fr-CA");
             var result = await service.LookupOrTranslateAsync("明天", "auto");
-            Assert.Equal("en", result.TargetLanguage);
-            var offline = new AiDictionaryService(() => null, cache);
-            Assert.Equal(DictionaryResultOrigin.Cache, (await offline.LookupOrTranslateAsync("明天", "en")).Origin);
+            Assert.Equal("fr", result.TargetLanguage);
+            var offline = new AiDictionaryService(() => null, cache, readerLanguageId: () => "fr-CA");
+            Assert.Equal("明天", await offline.FindSuggestionAsync("明", "auto", default));
+            Assert.Equal(DictionaryResultOrigin.Cache, (await offline.LookupOrTranslateAsync("明天", "fr")).Origin);
             await Assert.ThrowsAsync<AiException>(() => offline.LookupOrTranslateAsync("明天", "zh-Hans"));
         }
         finally { dir.Delete(true); }
@@ -210,7 +295,10 @@ public sealed class DictionaryCacheTests
     {
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
-            inspect?.Invoke(JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!);
+            var payload = JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!;
+            if (payload["senses"] is not null)
+                return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));
+            inspect?.Invoke(payload);
             var text = JsonSerializer.Serialize(new
             {
                 primaryTranslation = translation, itemType,

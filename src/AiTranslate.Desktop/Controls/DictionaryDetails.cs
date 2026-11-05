@@ -13,7 +13,7 @@ using Avalonia.Threading;
 namespace AiTranslate.Desktop.Controls;
 
 internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, AppSettingsStore settings, Action<string, string, bool> lookup,
-    Action<SentenceCloze>? practice = null, DictionaryDisclosures? disclosures = null, BlockReviewActions? reviews = null) : StackPanel
+    DictionaryDisclosures? disclosures = null, BlockReviewActions? reviews = null) : StackPanel
 {
     private sealed record Row(string Label, string Text, string? Note = null, BilingualExample? Example = null, bool Link = false,
         UsageContrast? Contrast = null, PartOfSpeechSense? Sense = null, int Number = 0, bool Chips = false, SenseHeading? Heading = null,
@@ -364,7 +364,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
         }
         else if (!string.IsNullOrWhiteSpace(row.Text)) body.Children.Add(RichText.Create(row.Text, TextRole.Body));
         if (!string.IsNullOrWhiteSpace(row.Note)) body.Children.Add(NoteBlock(row.Note));
-        if (row.Example is { } example) AddExample(body, example, row.Link ? row.Label : null);
+        if (row.Example is { } example) AddExample(body, example);
         return stacked || !hasLabels ? body : StudioUi.CreateKeyValue(row.Label, body, "RowLabel");
     }
 

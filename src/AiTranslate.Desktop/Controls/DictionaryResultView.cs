@@ -58,7 +58,7 @@ internal sealed class DictionaryResultView : StackPanel
         _settings = settings;
         _lookup = lookup;
         Disclosures = disclosures ?? new();
-        _details = new DictionaryDetails(speech, settings, lookup, cloze => ExamplePracticeCard.Open(this, cloze), Disclosures, BlockReviews);
+        _details = new DictionaryDetails(speech, settings, lookup, Disclosures, BlockReviews);
         _kindPill = new Border
         {
             Background = AppTheme.CardElevatedBg, CornerRadius = new CornerRadius(AppTheme.Radius.Pill),

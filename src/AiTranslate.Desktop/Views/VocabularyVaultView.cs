@@ -23,7 +23,7 @@ public sealed partial class VocabularyVaultView : UserControl
     private readonly NotebookShelf _shelf;
     private readonly VocabularyFilters _filters;
     private readonly ItemsControl _entries = new();
-    private readonly ScrollViewer _scroll = new();
+    private readonly ScrollViewer _scroll = new() { Padding = AppTheme.ScrollContentInset };
     private readonly StackPanel _empty = new() { Spacing = AppTheme.Space.M, HorizontalAlignment = HorizontalAlignment.Center };
     private readonly TextBlock _title = TextStyles.Create("", TextRole.PageTitle);
     private readonly TextBlock _description = TextStyles.Create("", TextRole.FieldLabel);
@@ -65,16 +65,17 @@ public sealed partial class VocabularyVaultView : UserControl
         _scroll.Content = _entries;
         var listCard = StudioUi.CreateBentoCard(new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,*"), RowSpacing = AppTheme.Space.M,
+            RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = AppTheme.Space.M,
             Children =
             {
-                header, _description, _filters, _resultCount,
-                new Grid { [Grid.RowProperty] = 4, Children = { _scroll, _empty } }
+                new StackPanel
+                {
+                    Margin = AppTheme.ScrollContentInset, Spacing = AppTheme.Space.M,
+                    Children = { header, _description, _filters, _resultCount }
+                },
+                new Grid { [Grid.RowProperty] = 1, Children = { _scroll, _empty } }
             }
-        }, new Thickness(AppTheme.Space.L));
-        Grid.SetRow(_description, 1);
-        Grid.SetRow(_filters, 2);
-        Grid.SetRow(_resultCount, 3);
+        }, new Thickness(0, AppTheme.Space.L));
         _empty.Margin = new Thickness(AppTheme.Space.S, AppTheme.Space.XXL);
         _empty.VerticalAlignment = VerticalAlignment.Top;
 

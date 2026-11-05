@@ -8,6 +8,8 @@ using AiTranslate.Vocabulary;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -24,7 +26,7 @@ public sealed class DictionaryInputTests
         .UseHeadless(new AvaloniaHeadlessPlatformOptions());
 
     [Fact]
-    public async Task SelectionPopupStreamsIntoDraftAndIgnoresSupersededSnapshots()
+    public async Task SelectionPopupStreamsWithoutPlaceholderAndIgnoresSupersededSnapshots()
     {
         await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
         var directory = Directory.CreateTempSubdirectory();
@@ -34,37 +36,102 @@ public sealed class DictionaryInputTests
             {
                 var dictionary = new PendingLookup();
                 using var speech = new KokoroSpeechService(directory.FullName);
-                var popup = new SelectionPopupWindow(dictionary, new VocabularyService(Path.Combine(directory.FullName, "words.json")),
-                    speech, new AppSettingsStore(Path.Combine(directory.FullName, "settings.json")), (_, _, _, _) => { });
+                var vocabulary = new VocabularyService(Path.Combine(directory.FullName, "words.json"));
+                var settingsPath = Path.Combine(directory.FullName, "settings.json");
+                File.WriteAllText(settingsPath, """{"autoAddLookedUpWordsToNotebook":true,"dictionaryReaderLanguage":"de"}""");
+                var popup = new SelectionPopupWindow(dictionary, vocabulary, speech, new AppSettingsStore(settingsPath), (_, _, _, _) => { });
+                var editor = new TextBox { Text = "a selected word" };
+                var sourceWindow = new Window { Content = editor };
+                sourceWindow.Show();
+                editor.Focus();
+                editor.SelectionStart = 2;
+                editor.SelectionEnd = 10;
                 try
                 {
-                    var capture = new CapturedTextEvent("draft", TranslationTriggerSource.SelectionPopup, new PointD(10, 10));
+                    var capture = new CapturedTextEvent(" ✨“draft,” ", TranslationTriggerSource.SelectionPopup, new PointD(10, 10), "阅读器");
+                    _ = popup.ShowAndTranslateAsync(capture with { Text = "，✨" });
+                    Assert.Empty(dictionary.Requests);
+                    Assert.False(popup.IsVisible);
                     _ = popup.ShowAndTranslateAsync(capture);
                     var first = Assert.Single(dictionary.Requests);
-                    Assert.Contains("正在起草译文…", VisibleText());
+                    Assert.Equal("draft", first.Query);
+                    Assert.Contains("draft", VisibleText());
+                    _ = popup.ShowAndTranslateAsync(capture with { Text = "，✨" });
+                    Assert.False(first.Token.IsCancellationRequested);
+                    Assert.False(popup.ShowActivated);
+                    Assert.True(editor.IsFocused);
+                    Assert.Equal("selected", editor.SelectedText);
+                    Assert.Equal(0, popup.GetVisualDescendants().OfType<SelectionPopupBody>().Single().DesiredSize.Height);
                     var preview = new DictionaryEntryResult
                     {
-                        SourceText = "draft", PrimaryTranslation = "草稿", Senses = [new("n.", "尚待修改的初稿", "")]
+                        SourceText = "draft", DetectedSourceLanguage = "en", PrimaryTranslation = "草稿", LiteralTranslation = "起草的文本",
+                        Senses = [new("n.", "尚待修改的初稿", "")]
                     };
+                    first.Fields(new DictionaryEntryResult { SourceText = "draft", PrimaryTranslation = "草" });
+                    Dispatcher.UIThread.RunJobs();
+                    Assert.Contains("草", VisibleText());
+                    var bookmark = popup.GetVisualDescendants().OfType<NotebookBookmarkButton>().Single();
+                    Assert.False(bookmark.IsEnabled);
+                    first.Usable(preview with { Senses = [], LiteralTranslation = "" });
                     first.Fields(preview);
                     Dispatcher.UIThread.RunJobs();
-                    Assert.Contains("尚待修改的初稿", VisibleText());
-                    Assert.Contains("正在整理释义…", VisibleText());
+                    Assert.Equal(["草稿", "尚待修改的初稿", "自然拼读"],
+                        VisibleText().Where(t => t is "草稿" or "尚待修改的初稿" or "自然拼读"));
+                    Assert.Contains("直译对照", VisibleText());
+                    Assert.Contains(preview.LiteralTranslation, VisibleText());
+                    Assert.DoesNotContain("正在整理释义…", VisibleText());
+                    Assert.True(bookmark.IsEnabled);
+                    Assert.Null(vocabulary.FindByHeadword("draft"));
+                    bookmark.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Assert.Contains("取消收录", VisibleText());
+                    var saved = vocabulary.FindByHeadword("draft");
+                    Assert.NotNull(saved);
+                    Assert.Equal("草稿", saved.Translation);
+                    Assert.Equal("阅读器", saved.SourceTitle);
+                    var reviewed = vocabulary.SubmitReview(saved.Id, ReviewRating.Good);
+
+                    first.Fields(preview with { Senses = [new("n.", "草稿"), new("noun", "征兵"), new("n.", "气流"), new("v.", "起草")] });
+                    Dispatcher.UIThread.RunJobs();
+                    Assert.Contains("草稿；征兵；气流", VisibleText());
+                    Assert.Contains("起草", VisibleText());
 
                     _ = popup.ShowAndTranslateAsync(capture with { Text = "note" });
+                    Assert.False(first.Token.IsCancellationRequested);
+                    first.Usable(preview);
                     first.Fields(preview);
-                    first.Completion.SetResult(preview);
-                    Dispatcher.UIThread.RunJobs();
-                    Assert.DoesNotContain("草稿", VisibleText());
-                    Assert.Contains("正在起草译文…", VisibleText());
-
-                    dictionary.Requests[1].Completion.SetResult(preview with
+                    first.Completion.SetResult(preview with
                     {
-                        Origin = DictionaryResultOrigin.Cache, SourceText = "note", PrimaryTranslation = "笔记", Senses = []
+                        SuggestedTags = ["写作"], Examples = [new("Read the draft.", "读一下草稿。")]
                     });
                     Dispatcher.UIThread.RunJobs();
+                    Assert.DoesNotContain("草稿", VisibleText());
+                    Assert.Contains("note", VisibleText());
+                    Assert.False(bookmark.IsEnabled);
+                    var reopened = new VocabularyService(Path.Combine(directory.FullName, "words.json"));
+                    var enriched = reopened.FindByHeadword("draft");
+                    Assert.NotNull(enriched);
+                    Assert.Equal(saved.Id, enriched.Id);
+                    Assert.Equal("写作", Assert.Single(enriched.Tags));
+                    Assert.Equal("Read the draft.", enriched.ContextSentence);
+                    Assert.Equal("阅读器", enriched.SourceTitle);
+                    Assert.Equal(preview.Senses, enriched.Senses);
+                    Assert.Equal(1, enriched.LookupCount);
+                    Assert.Equal(reviewed.NextReviewAt, enriched.NextReviewAt);
+                    Assert.Equal(reviewed.LastReviewedAt, enriched.LastReviewedAt);
+
+                    var note = preview with { SourceText = "note", PrimaryTranslation = "笔记", LiteralTranslation = "", Senses = [] };
+                    dictionary.Requests[1].Usable(note);
+                    Dispatcher.UIThread.RunJobs();
+                    Assert.True(bookmark.IsEnabled);
+                    bookmark.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    bookmark.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    dictionary.Requests[1].Completion.SetResult(note with { Origin = DictionaryResultOrigin.Cache });
+                    Dispatcher.UIThread.RunJobs();
                     Assert.Contains("笔记", VisibleText());
-                    Assert.DoesNotContain("正在起草译文…", VisibleText());
+                    Assert.DoesNotContain("直译对照", VisibleText());
+                    Assert.Null(vocabulary.FindByHeadword("note"));
+                    bookmark.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Assert.Equal(TranslationTriggerSource.SelectionPopup, vocabulary.FindByHeadword("note")?.CaptureSource);
 
                     string?[] VisibleText()
                     {
@@ -73,7 +140,7 @@ public sealed class DictionaryInputTests
                             .Select(t => t.Text).ToArray();
                     }
                 }
-                finally { popup.Close(); }
+                finally { popup.Close(); sourceWindow.Close(); }
             }, CancellationToken.None);
         }
         finally { directory.Delete(recursive: true); }
@@ -88,6 +155,13 @@ public sealed class DictionaryInputTests
             var send = view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == "发送翻译");
             Assert.False(send.IsEnabled);
             Assert.True(input.Focus());
+            window.KeyTextInput("，✨");
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(send.IsEnabled);
+            window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            window.KeyReleaseQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            Assert.Empty(dictionary.Requests);
+            input.Clear();
             window.KeyTextInput("high in rank or status;");
             window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.Shift);
             window.KeyReleaseQwerty(PhysicalKey.Enter, RawInputModifiers.Shift);
@@ -106,13 +180,13 @@ public sealed class DictionaryInputTests
             Dispatcher.UIThread.RunJobs();
             Assert.Contains("地位", Messages(view));
 
-            window.KeyTextInput("another word");
+            window.KeyTextInput("“another word，”");
             request.Preview("地位较高");
             Dispatcher.UIThread.RunJobs();
             Assert.Contains("地位较高", Messages(view));
             request.Complete("地位较高");
             Dispatcher.UIThread.RunJobs();
-            Assert.Equal("another word", input.Text);
+            Assert.Equal("“another word，”", input.Text);
             Assert.Equal("发送翻译", AutomationProperties.GetName(send));
             Assert.True(send.IsEnabled);
             send.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -216,6 +290,48 @@ public sealed class DictionaryInputTests
             Assert.Equal(expectedWidth, composer.Bounds.Width);
             Assert.True(source.TranslatePoint(default, window)!.Value.Y >
                 translation.TranslatePoint(new Point(0, translation.Bounds.Height), window)!.Value.Y);
+        });
+    }
+
+    [Theory]
+    [InlineData(788, 1.5)]
+    [InlineData(1200, 1.0)]
+    public async Task WrappedDraftClearsTheScrollbarAndKeepsItsReadingWidth(double workspaceWidth, double scale)
+    {
+        await RunInStudio((window, view, _, _) =>
+        {
+            window.Width = workspaceWidth;
+            window.SetRenderScaling(scale);
+            var composer = view.GetVisualDescendants().OfType<DictionaryComposer>().Single();
+            var input = composer.GetVisualDescendants().OfType<TextBox>().Single(b => b.AcceptsReturn);
+            var text = input.GetVisualDescendants().OfType<TextPresenter>().Single();
+            var bar = input.GetVisualDescendants().OfType<ScrollBar>().Single(b => b.Name == "PART_VerticalScrollBar");
+            input.Focus();
+            input.Text = "A short draft.";
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.False(bar.IsVisible);
+            var shortWidth = text.Bounds.Width;
+
+            input.Text = string.Join(" ", Enumerable.Repeat("A longer sentence wraps at the right edge of the composer.", 100));
+            input.CaretIndex = input.Text.Length;
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.True(bar.IsVisible);
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            var thumb = bar.GetVisualDescendants().OfType<Thumb>().Single();
+            var point = thumb.TranslatePoint(new Point(thumb.Bounds.Width / 2, thumb.Bounds.Height / 2), window)!.Value;
+            bar.ShowDelay = TimeSpan.Zero;
+            window.MouseMove(point);
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(bar.IsExpanded, $"Pointer at {point} hit {window.InputHitTest(point)}");
+            var left = text.TranslatePoint(default, composer)!.Value.X;
+            var right = left + text.Bounds.Width;
+            var track = bar.TranslatePoint(default, composer)!.Value.X;
+            Assert.Equal(shortWidth, text.Bounds.Width);
+            Assert.Equal(left, composer.Bounds.Width - right, 3);
+            Assert.True(right <= track + 0.001);
+            Assert.InRange(composer.Bounds.Width - track - bar.Bounds.Width, 0, 2);
         });
     }
 
@@ -477,33 +593,25 @@ public sealed class DictionaryInputTests
     }
 
     [Fact]
-    public async Task ExamplePracticeHidesReadingUntilRevealAndReturnsWithoutALookup()
+    public async Task ExpandedCollocationShowsBothSentencesWithOnlyReadAloud()
     {
         await RunInStudio((window, view, dictionary, _) =>
         {
             var entry = new DictionaryEntryResult
             {
-                SourceText = "go", PrimaryTranslation = "去",
-                Examples = [new("We went home.", "我们回家了。", "went")]
+                SourceText = "good", PrimaryTranslation = "好的", DetectedSourceLanguage = "en",
+                Collocations = [new("be good at", "擅长", "表示能力",
+                    new("He is good at solving problems under pressure.", "他擅长在压力下解决问题。", "is good at"))]
             };
             view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
             window.UpdateLayout();
-            void Click(string label) => view.GetVisualDescendants().OfType<Button>().Single(b => b.IsEffectivelyVisible &&
-                b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == label)).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            string?[] VisibleText() => view.GetVisualDescendants().OfType<TextBlock>()
-                .Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? t.Inlines?.Text).ToArray();
-            Click("自测");
-            window.UpdateLayout();
-            Assert.Contains("We _____ home.", VisibleText());
-            Assert.DoesNotContain("go", VisibleText());
-            Assert.DoesNotContain("我们回家了。", VisibleText());
-            Click("揭晓答案");
-            window.UpdateLayout();
-            Assert.Contains("went", VisibleText());
-            Assert.Contains("我们回家了。", VisibleText());
-            Click("返回结果");
-            window.UpdateLayout();
-            Assert.Contains("go", VisibleText());
+            var source = view.GetVisualDescendants().OfType<DictionaryReadingText>()
+                .Single(t => t.Inlines?.Text == entry.Collocations[0].Example!.SourceSentence);
+            var example = source.GetVisualAncestors().OfType<Grid>().First();
+            Assert.True(example.IsEffectivelyVisible);
+            Assert.Contains(example.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "他擅长在压力下解决问题。");
+            var read = Assert.Single(example.GetVisualDescendants().OfType<Button>());
+            Assert.Contains(read.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "跟读");
             Assert.Empty(dictionary.Requests);
         });
     }
@@ -525,7 +633,7 @@ public sealed class DictionaryInputTests
             Assert.Contains(view.GetVisualDescendants().OfType<Button>(), b => AutomationProperties.GetName(b) == "智能复核 · 直译对照");
             var target = sections.Single(s => s.Title == "词性与释义");
             var button = (Button)target.ActionSlot.Content!;
-            var input = view.GetVisualDescendants().OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "待翻译文本");
+            var input = view.GetVisualDescendants().OfType<SuggestingTextBox>().Single();
             var flow = view.GetVisualDescendants().OfType<FlowingBorderEffect>().Single();
             input.Text = "下一个词";
             button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -577,7 +685,7 @@ public sealed class DictionaryInputTests
             window.UpdateLayout();
             Assert.Contains(fail ? "踢桶" : "踢那个桶", Messages(view));
             Assert.DoesNotContain("踢那个", Messages(view));
-            Assert.True(view.GetVisualDescendants().OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "待翻译文本").IsEffectivelyEnabled);
+            Assert.True(view.GetVisualDescendants().OfType<SuggestingTextBox>().Single().IsEffectivelyEnabled);
             Assert.Equal(fail, view.GetVisualDescendants().OfType<DictionaryTranslations>().Single()
                 .GetVisualDescendants().OfType<TextBlock>().Any(t => t.IsEffectivelyVisible && t.Text?.Contains("连接中断") == true));
             if (fail)
@@ -758,6 +866,45 @@ public sealed class DictionaryInputTests
     }
 
     [Fact]
+    public async Task ReadingTablesFitLongLabelsAndReflowHintsWhenTheWindowNarrows()
+    {
+        await RunInStudio((window, view, _, _) =>
+        {
+            const string condition = "指某人或某语言的词汇总量";
+            const string phrase = "build/expand your vocabulary";
+            var entry = new DictionaryEntryResult
+            {
+                SourceText = "vocabulary", PrimaryTranslation = "词汇",
+                Senses = [new("n.", "词汇") { UsageCases = [
+                    new(condition, "不可数名词", "a large vocabulary", "词汇量大"),
+                    new("指专门的词语表或小词表", "可数名词", "a vocabulary of technical terms", "一份术语表")] }],
+                Collocations = [new(phrase, "扩大词汇量", "词汇总量"),
+                    new("technical vocabulary", "专业词汇", "某领域用语", new("Learn technical vocabulary.", "学习专业词汇。"))]
+            };
+            view.DisplayResult(entry, TranslationTriggerSource.VocabularyReview, "");
+            void Resize(double width) { window.Width = width; window.UpdateLayout(); }
+            TextBlock Find(string text) => view.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == text);
+            Point Position(TextBlock text) => text.TranslatePoint(default, window)!.Value;
+            Resize(960);
+            var meaning = Find("扩大词汇量");
+            var hint = Find("词汇总量");
+            var term = Find(phrase);
+            Assert.Single(Find(condition).TextLayout.TextLines);
+            Assert.Single(term.TextLayout.TextLines);
+            Assert.Equal(Position(meaning).Y, Position(hint).Y, 1);
+            Assert.True(Position(meaning).X < Position(hint).X);
+            Assert.Equal(Position(meaning).X, Position(Find("专业词汇")).X, 1);
+            Resize(355);
+            Assert.True(Position(hint).Y > Position(meaning).Y);
+            Assert.Equal(Position(meaning).X, Position(hint).X, 1);
+            Assert.InRange(hint.TranslatePoint(new Point(hint.Bounds.Width, 0), window)!.Value.X, 0, window.Width);
+            Resize(960);
+            Assert.Same(hint, Find("词汇总量"));
+            Assert.Equal(Position(meaning).Y, Position(hint).Y, 1);
+        });
+    }
+
+    [Fact]
     public async Task UsageConditionsStayWithTheirExpressionsAndSurviveUnrelatedStreamingChanges()
     {
         await RunInStudio((window, view, dictionary, vocabulary) =>
@@ -867,14 +1014,175 @@ public sealed class DictionaryInputTests
         });
     }
 
-    private static async Task RunInStudio(Action<Window, DictionaryStudioView, PendingLookup, VocabularyService> run)
+    [Theory]
+    [InlineData(788, 1.0)]
+    [InlineData(440, 1.5)]
+    public async Task OnlyVisibleSuggestionsAreAcceptedAndTabDoesNotSubmit(double width, double scale)
+    {
+        await RunInStudioAsync(async (window, view, dictionary, _) =>
+        {
+            window.Width = width;
+            window.SetRenderScaling(scale);
+            var input = view.GetVisualDescendants().OfType<SuggestingTextBox>().Single();
+            var presenter = input.GetVisualDescendants().OfType<TextPresenter>().Single();
+            var first = new TaskCompletionSource<string?>();
+            var started = new TaskCompletionSource();
+            dictionary.Suggest = (prefix, _) =>
+            {
+                if (prefix != "g") return Task.FromResult(prefix == "go" ? "good" : null);
+                started.TrySetResult();
+                return first.Task;
+            };
+            input.Focus();
+            window.KeyTextInput("g");
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            window.KeyTextInput("o");
+            var preview = input.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Inlines?.Count == 2);
+            async Task WaitForPreview()
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                while (!preview.IsVisible) await Task.Delay(10, timeout.Token);
+                window.UpdateLayout();
+            }
+            void Key(PhysicalKey key, RawInputModifiers modifiers = RawInputModifiers.None)
+            {
+                window.KeyPressQwerty(key, modifiers);
+                window.KeyReleaseQwerty(key, modifiers);
+            }
+            await WaitForPreview();
+            first.SetResult("garden");
+            await Task.Yield();
+            Assert.Equal("go\u200Bod", preview.Inlines!.Text);
+            Assert.Equal("go", input.Text);
+            var ghostStart = preview.TextLayout.HitTestTextPosition(3).TopLeft;
+            var caret = presenter.TextLayout.HitTestTextPosition(2).TopLeft;
+            Assert.Equal(presenter.TranslatePoint(caret, input), preview.TranslatePoint(ghostStart, input));
+            window.KeyTextInput("t");
+            Assert.False(preview.IsVisible);
+            Assert.Equal("got", input.Text);
+            Key(PhysicalKey.Backspace);
+            await WaitForPreview();
+            presenter.PreeditText = "拼";
+            Assert.False(preview.IsVisible);
+            presenter.PreeditText = null;
+            await WaitForPreview();
+            Key(PhysicalKey.ArrowLeft);
+            Assert.False(preview.IsVisible);
+            Key(PhysicalKey.End);
+            await WaitForPreview();
+            window.KeyTextInput("o");
+            Assert.True(preview.IsVisible);
+            Key(PhysicalKey.Tab);
+            Assert.True(input.IsFocused);
+            Assert.Equal("good", input.Text);
+            Assert.Equal(4, input.CaretIndex);
+            Assert.Empty(dictionary.Requests);
+            Key(PhysicalKey.Enter);
+            Assert.Equal("good", Assert.Single(dictionary.Requests).Query);
+            Assert.True(dictionary.CacheOnly);
+            window.KeyTextInput("unknown");
+            Key(PhysicalKey.Tab);
+            Assert.False(input.IsFocused);
+            Assert.Equal("unknown", input.Text);
+        });
+    }
+
+    [Theory]
+    [InlineData(788, "good")]
+    [InlineData(440, "gem")]
+    public async Task BackspacingKeepsTheMatchingSuggestionVisibleWhileReranking(int width, string winner)
+    {
+        await RunInStudioAsync(async (window, view, dictionary, _) =>
+        {
+            window.Width = width;
+            var input = view.GetVisualDescendants().OfType<SuggestingTextBox>().Single();
+            var preview = input.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Inlines?.Count == 2);
+            var lookup = new TaskCompletionSource<string?>();
+            var started = new TaskCompletionSource();
+            dictionary.Suggest = (prefix, _) =>
+            {
+                if (prefix is "goo" or "go") return Task.FromResult<string?>("good");
+                started.TrySetResult();
+                return lookup.Task;
+            };
+            input.Focus();
+            window.KeyTextInput("goo");
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (!preview.IsVisible) await Task.Delay(10, timeout.Token);
+            var previewWasHidden = false;
+            preview.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == Visual.IsVisibleProperty && !preview.IsVisible) previewWasHidden = true;
+            };
+            void Press(PhysicalKey key)
+            {
+                window.KeyPressQwerty(key, RawInputModifiers.None);
+                window.KeyReleaseQwerty(key, RawInputModifiers.None);
+            }
+            Press(PhysicalKey.Backspace);
+            Assert.True(preview.IsVisible);
+            Assert.Equal("go\u200Bod", preview.Inlines!.Text);
+            Press(PhysicalKey.Backspace);
+            Assert.True(preview.IsVisible);
+            Assert.Equal("g\u200Bood", preview.Inlines.Text);
+            await started.Task.WaitAsync(timeout.Token);
+            Assert.True(preview.IsVisible);
+            lookup.SetResult(winner);
+            await Task.Yield();
+            Assert.False(previewWasHidden);
+            Assert.Equal("g\u200B" + winner[1..], preview.Inlines.Text);
+            Press(PhysicalKey.Tab);
+            Assert.Equal(winner, input.Text);
+            Press(PhysicalKey.Backspace);
+            Assert.True(preview.IsVisible);
+            Assert.Equal(winner[..^1] + "\u200B" + winner[^1], preview.Inlines.Text);
+            Assert.Empty(dictionary.Requests);
+        });
+    }
+
+    private static Task RunInStudio(Action<Window, DictionaryStudioView, PendingLookup, VocabularyService> run) =>
+        RunInStudioAsync((w, v, d, s) => { run(w, v, d, s); return Task.CompletedTask; });
+
+    [Fact]
+    public async Task WrappingTheSuggestionKeepsTheTypedWordInPlace()
+    {
+        await RunInStudioAsync(async (window, view, dictionary, _) =>
+        {
+            window.Width = 440;
+            var input = view.GetVisualDescendants().OfType<SuggestingTextBox>().Single();
+            var presenter = input.GetVisualDescendants().OfType<TextPresenter>().Single();
+            dictionary.Suggest = (prefix, _) => Task.FromResult<string?>(prefix + "odness");
+            input.Focus();
+            // Place a partial word where the prefix fits but the whole word must wrap.
+            var prefix = "go";
+            for (var i = 0; i < 100; i++)
+            {
+                input.Text = prefix;
+                input.CaretIndex = prefix.Length;
+                window.UpdateLayout();
+                if (presenter.Bounds.Width - presenter.TextLayout.HitTestTextPosition(prefix.Length).X < 35) break;
+                prefix = "a " + prefix;
+            }
+            var preview = input.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Inlines?.Count == 2);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (!preview.IsVisible) await Task.Delay(10, timeout.Token);
+            window.UpdateLayout();
+            Assert.True(preview.TextLayout.TextLines.Count > presenter.TextLayout.TextLines.Count);
+            var last = prefix.Length - 1;
+            Assert.Equal(presenter.TranslatePoint(presenter.TextLayout.HitTestTextPosition(last).TopLeft, input),
+                preview.TranslatePoint(preview.TextLayout.HitTestTextPosition(last).TopLeft, input));
+        });
+    }
+
+    private static async Task RunInStudioAsync(Func<Window, DictionaryStudioView, PendingLookup, VocabularyService, Task> run)
     {
         await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
         var directory = Directory.CreateTempSubdirectory();
         try
         {
-            await session.Dispatch(() =>
+            await session.Dispatch(async () =>
             {
+                System.Globalization.CultureInfo.CurrentUICulture = System.Globalization.CultureInfo.GetCultureInfo("zh-CN");
                 var dictionary = new PendingLookup();
                 using var speech = new KokoroSpeechService(directory.FullName);
                 var vocabulary = new VocabularyService(Path.Combine(directory.FullName, "words.json"));
@@ -885,12 +1193,13 @@ public sealed class DictionaryInputTests
                 window.Show();
                 try
                 {
-                    run(window, view, dictionary, vocabulary);
+                    await run(window, view, dictionary, vocabulary);
                 }
                 finally
                 {
                     window.Close();
                 }
+                return true;
             }, CancellationToken.None);
         }
         finally
@@ -901,6 +1210,9 @@ public sealed class DictionaryInputTests
 
     private sealed class PendingLookup : IAiDictionaryService
     {
+        public Func<string, CancellationToken, Task<string?>> Suggest { get; set; } = (_, _) => Task.FromResult<string?>(null);
+        public Task<string?> FindSuggestionAsync(string prefix, string targetMode, CancellationToken cancellationToken) => Suggest(prefix, cancellationToken);
+        public bool CacheOnly { get; private set; }
         public List<Request> Requests { get; } = [];
         public TaskCompletionSource<DictionaryEntryResult> Supplement { get; } = new();
         public EntryBlock? ReviewedBlock { get; private set; }
@@ -923,9 +1235,12 @@ public sealed class DictionaryInputTests
 
         public Task<DictionaryEntryResult> LookupOrTranslateAsync(string sourceText, string targetLanguageId,
             string? contextSentence, Action<string>? onStreamingPreview, CancellationToken cancellationToken,
-            Action<DictionaryEntryResult>? onEntryPreview = null, bool forceRefresh = false)
+            Action<DictionaryEntryResult>? onEntryPreview = null, bool forceRefresh = false, bool cacheOnly = false,
+            Action<DictionaryEntryResult>? onUsableEntry = null)
         {
-            var request = new Request(sourceText, onStreamingPreview!, cancellationToken, onEntryPreview!, targetLanguageId, forceRefresh, contextSentence);
+            CacheOnly = cacheOnly;
+            var request = new Request(sourceText, onStreamingPreview!, cancellationToken, onEntryPreview!, targetLanguageId, forceRefresh, contextSentence)
+                { Usable = onUsableEntry! };
             Requests.Add(request);
             return request.Completion.Task;
         }
@@ -934,6 +1249,7 @@ public sealed class DictionaryInputTests
     private sealed record Request(string Query, Action<string> Preview, CancellationToken Token, Action<DictionaryEntryResult> Fields,
         string Language, bool ForceRefresh, string? Context)
     {
+        public Action<DictionaryEntryResult> Usable { get; init; } = null!;
         public TaskCompletionSource<DictionaryEntryResult> Completion { get; } = new();
         public void Complete(string translation) =>
             Completion.SetResult(new DictionaryEntryResult { SourceText = Query, PrimaryTranslation = translation });

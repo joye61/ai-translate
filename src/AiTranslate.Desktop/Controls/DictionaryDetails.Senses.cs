@@ -177,7 +177,7 @@ internal sealed partial class DictionaryDetails
                 table.Children.Add(StudioUi.CreateKeyValue(label, RichText.Create(value, TextRole.Secondary), "SenseField"));
             body.Children.Add(table);
         }
-        if (row.Example is { } example) AddExample(body, example, null);
+        if (row.Example is { } example) AddExample(body, example);
 
         var ordinal = Math.Max(row.Number, 1);
         var toggle = body.Children.Count == 0 ? null : _disclosures.Toggle(EntryBlock.Senses,

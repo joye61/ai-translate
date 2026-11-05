@@ -1,4 +1,5 @@
 using AiTranslate.Ai;
+using AiTranslate.Core;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -17,19 +18,18 @@ internal enum ComposerActivity { Ready, Translating, ReviewingBlock }
 internal sealed class DictionaryComposer : Grid
 {
     private const string InputPrompt = "输入要翻译的单词、短语或段落…";
-    private readonly TextBlock _hint = TextStyles.Create(null, TextRole.Meta, wrap: false);
-    private readonly TextBox _input = new()
+    private readonly SuggestingTextBox _input = new()
     {
         Classes = { "chat-input" },
         PlaceholderText = InputPrompt,
         AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
         MinHeight = 48, MaxHeight = 168,
         FontSize = AppTheme.Type.BodyLarge, Foreground = AppTheme.TextPrimary,
-        Background = AppTheme.CardBg, BorderThickness = default,
-        Padding = new Thickness(AppTheme.Space.XXS, AppTheme.Space.XS)
+        Background = AppTheme.CardBg, BorderThickness = default
     };
     private readonly ComboBox _language;
     private readonly Button _send;
+    private readonly TextBlock _hint = TextStyles.Create(null, TextRole.Meta, wrap: false);
     private readonly MdiIcon _sendIcon = new("arrow-up", 20, AppTheme.CardBg);
     private readonly FlowingBorderEffect _flow = new();
     private bool _generating;
@@ -37,7 +37,8 @@ internal sealed class DictionaryComposer : Grid
     public string? LanguageId => (_language.SelectedItem as TranslationLanguage)?.Id;
     public void FocusInput() => _input.Focus();
 
-    public DictionaryComposer(AppSettingsStore settings, Action<string> submit, Action stop)
+    public DictionaryComposer(AppSettingsStore settings, Func<string, string, CancellationToken, Task<string?>> findSuggestion,
+        Action<string, bool> submit, Action stop)
     {
         AutomationProperties.SetName(_input, "待翻译文本");
         var initialMode = DictionaryTranslationDirection.GetMode(settings.Current);
@@ -49,13 +50,17 @@ internal sealed class DictionaryComposer : Grid
             SelectionBoxItemTemplate = new FuncDataTemplate<TranslationLanguage>((item, _) => ChipLabel("translate", item?.DisplayName)),
             SelectedItem = DictionaryTranslationDirection.Modes.First(m => m.Id == initialMode)
         };
+        _input.FindSuggestion = (prefix, token) => findSuggestion(prefix, LanguageId ?? initialMode, token);
         _language.SelectionChanged += (_, _) =>
         {
+            _input.ResetSuggestions();
             if (LanguageId is { } mode && mode != DictionaryTranslationDirection.GetMode(settings.Current))
                 settings.Update(settings.Current with { DictionaryTargetMode = mode });
         };
         AutomationProperties.SetName(_language, "翻译方向");
-        ToolTip.SetTip(_language, "翻译方向 · 自动模式下，中文译为英语，英文译为简体中文");
+        var systemLanguage = DictionaryTranslationDirection.ReaderLanguage();
+        var alternate = systemLanguage.Id == "en" ? "简体中文" : "英语";
+        ToolTip.SetTip(_language, $"自动模式下，外语译为{systemLanguage.ChineseName}，{systemLanguage.ChineseName}译为{alternate}");
         _language.HorizontalAlignment = HorizontalAlignment.Left;
         _send = new Button
         {
@@ -67,7 +72,7 @@ internal sealed class DictionaryComposer : Grid
         };
         _send.Click += (_, _) =>
         {
-            if (_generating && string.IsNullOrWhiteSpace(_input.Text)) stop();
+            if (_generating && !DictionaryQuery.HasContent(_input.Text)) stop();
             else Send();
             _input.Focus();
         };
@@ -83,10 +88,12 @@ internal sealed class DictionaryComposer : Grid
 
         void Send()
         {
-            if (!IsEffectivelyEnabled || string.IsNullOrWhiteSpace(_input.Text)) return;
-            var query = _input.Text.Trim();
+            if (!IsEffectivelyEnabled) return;
+            var query = _input.Text ?? "";
+            if (!DictionaryQuery.HasContent(query)) return;
+            var cacheOnly = query == _input.AcceptedSuggestion;
             _input.Clear();
-            submit(query);
+            submit(query, cacheOnly);
         }
 
         _hint.VerticalAlignment = VerticalAlignment.Center;
@@ -95,6 +102,7 @@ internal sealed class DictionaryComposer : Grid
         _hint.Opacity = 0.6;
         var footer = new Grid
         {
+            Margin = AppTheme.ScrollContentInset,
             ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = AppTheme.Space.M,
             Children = { _language, _hint, _send }
         };
@@ -103,7 +111,7 @@ internal sealed class DictionaryComposer : Grid
         var card = StudioUi.CreateBentoCard(new StackPanel
         {
             Spacing = AppTheme.Space.S, Children = { _input, footer }
-        }, padding: new Thickness(AppTheme.Space.L, AppTheme.Space.M, AppTheme.Space.M, AppTheme.Space.M));
+        }, padding: new Thickness(0, AppTheme.Space.M));
         card.ClearValue(Border.BorderBrushProperty);
         card.BoxShadow = default;
         SizeChanged += (_, e) => _hint.IsVisible = e.NewSize.Width >= 640;
@@ -123,13 +131,13 @@ internal sealed class DictionaryComposer : Grid
         _flow.IsVisible = _generating;
         IsEnabled = activity != ComposerActivity.ReviewingBlock;
         _input.PlaceholderText = IsEnabled ? InputPrompt : "栏目复核中…";
-        _hint.Text = IsEnabled ? "Enter 发送  ·  Shift + Enter 换行" : "复核完成后可继续输入";
+        _hint.Text = IsEnabled ? "Tab 补全  ·  Enter 发送  ·  Shift + Enter 换行" : "复核完成后可继续输入";
         UpdateAction();
     }
 
     private void UpdateAction()
     {
-        var hasText = !string.IsNullOrWhiteSpace(_input.Text);
+        var hasText = DictionaryQuery.HasContent(_input.Text);
         var stop = _generating && !hasText;
         _sendIcon.IconName = stop ? "stop" : "arrow-up";
         var label = stop ? "停止生成" : "发送翻译";

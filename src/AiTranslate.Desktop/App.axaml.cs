@@ -1,5 +1,6 @@
 using AiTranslate.Ai;
 using AiTranslate.Core;
+using AiTranslate.Desktop.Controls;
 using AiTranslate.Platform.Linux;
 using AiTranslate.Platform.MacOS;
 using AiTranslate.Platform.Windows;
@@ -55,11 +56,11 @@ public sealed class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             _platform = CreatePlatformService();
+            var selectionPrivacy = _platform is WindowsDesktopPlatformService windows ? new WindowsSelectionPrivacy(windows) : null;
             var settingsStore = new AppSettingsStore();
             var vocabularyService = new VocabularyService();
             var dictionaryService = new AiDictionaryService(() => settingsStore.CreateTransport(),
-                new DictionaryEntryCache(), vocabularyService.FindGlossaryTerms, vocabularyService.RefreshCollectedEntries,
-                () => settingsStore.Current.DictionaryReaderLanguage);
+                new DictionaryEntryCache(), vocabularyService.FindGlossaryTerms, vocabularyService.RefreshCollectedEntries);
             _speechService = new KokoroSpeechService();
 
             var mainWindow = new MainWindow(
@@ -74,6 +75,7 @@ public sealed class App : Application
             desktop.ShutdownMode = Avalonia.Controls.ShutdownMode.OnMainWindowClose;
             desktop.Exit += (_, _) =>
             {
+                selectionPrivacy?.Dispose();
                 _speechService?.Dispose();
                 _platform?.Dispose();
             };

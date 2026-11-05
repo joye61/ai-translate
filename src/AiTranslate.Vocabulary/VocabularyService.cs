@@ -380,7 +380,6 @@ public sealed partial class VocabularyService : IVocabularyService
     public VocabularyEntry SubmitReview(
         string entryId,
         ReviewRating rating,
-        ReviewQuizMode quizMode = ReviewQuizMode.Flashcard,
         int durationMs = 1500,
         DateTimeOffset? now = null)
     {
@@ -397,7 +396,6 @@ public sealed partial class VocabularyService : IVocabularyService
                 Id: $"rev_{Guid.NewGuid():N}"[..16],
                 EntryId: entryId,
                 Rating: rating,
-                QuizMode: quizMode,
                 PreviousStage: before.Stage,
                 NewStage: updated.Stage,
                 PreviousStability: before.StabilityDays,
