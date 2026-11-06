@@ -161,7 +161,11 @@ public sealed partial class VocabularyVaultView : UserControl
         AutomationProperties.SetName(open, $"查看词条 {entry.Headword}");
         open.Click += (_, _) => ShowEntry(entry);
         var star = RowAction(entry.IsStarred ? "star" : "star-outline", entry.IsStarred ? "取消星标" : "添加星标",
-            () => _service.ToggleStar(entry.Id), entry.IsStarred ? AppTheme.Amber : AppTheme.TextMuted);
+            () =>
+            {
+                try { _service.ToggleStar(entry.Id); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _setStatus($"星标保存失败。{ex.Message}"); }
+            }, entry.IsStarred ? AppTheme.Amber : AppTheme.TextMuted);
         var edit = RowAction("pencil-outline", "编辑或移动词条", () => EditEntry(entry), AppTheme.TextSecondary);
         Grid.SetColumn(star, 1);
         Grid.SetColumn(edit, 2);

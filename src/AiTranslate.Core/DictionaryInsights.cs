@@ -28,3 +28,12 @@ public sealed record SynonymNuance(string Word, string Nuance, string Register =
 
 /// <summary>A real learner error, its correction and the reason.</summary>
 public sealed record UsageMistake(string Wrong, string Right, string Why = "");
+
+/// <summary>One distinct, factual aspect of a word's history or cultural context.</summary>
+public sealed record EntryExplanation(string Title, string Explanation);
+
+/// <summary>A memory strategy, separated from factual word formation and etymology.</summary>
+public sealed record MnemonicStrategy(string Method, string Cue, string Explanation);
+
+/// <summary>Source evidence for one register or tone observation.</summary>
+public sealed record ToneEvidence(string Quote, string Aspect, string Explanation);

@@ -8,7 +8,7 @@ namespace AiTranslate.Tests;
 public sealed class VerifiedTranslationCacheTests
 {
     [Fact]
-    public async Task ScreenshotReopensOfflineWithNewRegionIdsAndOnlySuccessfulRefreshReplacesIt()
+    public async Task IdenticalScreenshotsRequestNewTranslationsAndVerificationWithoutOpeningTheCache()
     {
         var dir = Directory.CreateTempSubdirectory();
         try
@@ -17,26 +17,23 @@ public sealed class VerifiedTranslationCacheTests
             var replies = new Replies(
                 """{"regions":[{"id":"a","text":"OpenAI"},{"id":"b","text":"打开"}]}""",
                 """{"regions":[{"id":"a","reason":"protected_content"}]}""",
-                """{"regions":[{"id":"x","text":"OpenAI"},{"id":"y","text":"开启"}]}""",
-                """{"regions":[{"id":"x","reason":"protected_content"}]}""",
+                """{"regions":[{"id":"a","text":"OpenAI"},{"id":"b","text":"开启"}]}""",
+                """{"regions":[{"id":"a","reason":"protected_content"}]}""",
                 """{"regions":[]}""");
             var online = new AiTranslationService(replies, new DictionaryEntryCache(path));
-            TranslationSourceRegion[] first = [new("a", "OpenAI"), new("b", "Open")];
-            TranslationSourceRegion[] next = [new("x", "OpenAI"), new("y", "Open")];
-            await online.TranslateRegionsAsync(first, "zh-Hans", default);
+            TranslationSourceRegion[] regions = [new("a", "OpenAI"), new("b", "Open")];
+            var first = await online.TranslateRegionsAsync(regions, "zh-Hans", default);
+            Assert.Equal(new TranslationRegionText("b", "打开"), first[1]);
             Assert.Equal(2, replies.Calls);
-            var hit = await online.TranslateRegionsAsync(next, "zh-Hans", default);
-            Assert.Equal(new TranslationRegionText("y", "打开"), hit[1]);
-            Assert.Equal(2, replies.Calls);
-
-            await online.TranslateRegionsAsync(next, "zh-Hans", default, forceRefresh: true);
-            await Assert.ThrowsAsync<AiException>(() => online.TranslateRegionsAsync(next, "zh-Hans", default, forceRefresh: true));
-            var offline = new AiTranslationService(null, new DictionaryEntryCache(path));
-            Assert.Equal("开启", (await offline.TranslateRegionsAsync(first, "zh-Hans", default))[1].Text);
+            var next = await online.TranslateRegionsAsync(regions, "zh-Hans", default);
+            Assert.Equal(new TranslationRegionText("b", "开启"), next[1]);
+            Assert.Equal(4, replies.Calls);
+            await Assert.ThrowsAsync<AiException>(() => online.TranslateRegionsAsync(regions, "zh-Hans", default, forceRefresh: true));
             Assert.Equal(5, replies.Calls);
-            await Assert.ThrowsAsync<AiException>(() => offline.TranslateRegionsAsync(first.Reverse().ToArray(), "zh-Hans", default));
-            await Assert.ThrowsAsync<AiException>(() => offline.TranslateRegionsAsync(first, "ja", default));
-            await Assert.ThrowsAsync<AiException>(() => offline.TranslateRegionsAsync([first[0], first[0]], "zh-Hans", default));
+            var offline = new AiTranslationService(null, new DictionaryEntryCache(path));
+            await Assert.ThrowsAsync<AiException>(() => offline.TranslateRegionsAsync(regions, "zh-Hans", default));
+            await Assert.ThrowsAsync<AiException>(() => offline.TranslateRegionsAsync([new("a", "coffee")], "zh-Hans", default));
+            Assert.False(File.Exists(path));
         }
         finally { dir.Delete(true); }
     }

@@ -118,7 +118,7 @@ internal sealed partial class DictionaryDetails
         {
             var details = new StackPanel { Margin = new Thickness(0, 0, AppTheme.Space.L, AppTheme.Space.M) };
             AddExample(details, example);
-            Add(_disclosures.Toggle(EntryBlock.Collocations, row.Label, row.Number, row.Label, "例句", details, row.Number == 1), 4);
+            Add(_disclosures.Toggle(EntryBlock.Collocations, row.Label, row.Number, row.Label, "例句", details), 4);
             Grid.SetColumnSpan(details, 4);
             table.AddCell(details, line + 2, 1);
         }
@@ -169,67 +169,29 @@ internal sealed partial class DictionaryDetails
         return grid;
     }
 
-    private void AddExample(StackPanel body, BilingualExample example)
+    private void AddExample(StackPanel body, BilingualExample example) => AddExample(body, example, null);
+
+    private void AddExample(StackPanel body, BilingualExample example, string? caption)
     {
         SelectableTextBlock line = _finished is null ? TextStyles.Selectable(example.SourceSentence, TextRole.ExampleSource)
             : TextStyles.Apply(new DictionaryReadingText(example.SourceSentence, (q, context) => lookup(q, context, false),
                 [example.HighlightTerm], termForeground: AppTheme.AccentBright), TextRole.ExampleSource);
-        var pair = new StackPanel { Spacing = 1, Children = { line } };
+        var pair = new StackPanel { Spacing = AppTheme.Space.XXS };
+        if (!string.IsNullOrWhiteSpace(caption)) pair.Children.Add(TextStyles.Selectable(caption, TextRole.Label));
+        pair.Children.Add(line);
         if (!string.IsNullOrWhiteSpace(example.TranslatedSentence))
         {
             var translation = TextStyles.Selectable(example.TranslatedSentence, TextRole.ExampleTarget);
             if (_finished is not null) DictionaryReadingText.EnableSelectionLookup(translation, (q, context) => lookup(q, context, true));
             pair.Children.Add(translation);
         }
-        var quote = new MdiIcon("format-quote-open", 16, AppTheme.TextMuted)
-        {
-            VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 3, 0, 0)
-        };
-        Grid.SetColumn(pair, 1);
-        var grid = new ExampleGrid(quote, pair)
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto"),
-            ColumnSpacing = AppTheme.Space.S, Children = { quote, pair }
-        };
+        Button? read = null;
         if (_finished is not null && _readAccent is { } accent)
         {
-            var read = SpeechPlaybackButton.Create(click => StudioUi.CreateCompactButton("volume-high", "跟读", click),
+            read = SpeechPlaybackButton.Create(click => StudioUi.CreateCompactButton("volume-high", "跟读", click),
                 playback => PhonicsAudioBar.SpeakSentence(speech, settings, example.SourceSentence, accent, playback));
             ToolTip.SetTip(read, "朗读这句例句");
-            read.HorizontalAlignment = HorizontalAlignment.Right;
-            read.VerticalAlignment = VerticalAlignment.Top;
-            Grid.SetColumn(read, 2);
-            grid.Children.Add(read);
-            grid.Actions = read;
         }
-        body.Children.Add(new Border
-        {
-            Background = AppTheme.InputBg,
-            CornerRadius = new CornerRadius(AppTheme.Radius.M),
-            Padding = new Thickness(AppTheme.Space.M, AppTheme.Space.S), Child = grid
-        });
-    }
-
-    private sealed class ExampleGrid(Control quote, Control pair) : Grid
-    {
-        public Control? Actions { get; set; }
-
-        protected override Size MeasureOverride(Size availableSize)
-        {
-            if (Actions is { } actions)
-            {
-                pair.Measure(Size.Infinity);
-                actions.Measure(Size.Infinity);
-                quote.Measure(Size.Infinity);
-                var inlineWidth = quote.DesiredSize.Width + pair.DesiredSize.Width + actions.DesiredSize.Width + 2 * ColumnSpacing;
-                var below = availableSize.Width < 520 && inlineWidth > availableSize.Width;
-                SetColumnSpan(pair, below ? 2 : 1);
-                SetColumn(actions, below ? 1 : 2);
-                SetRow(actions, below ? 1 : 0);
-                SetColumnSpan(actions, below ? 2 : 1);
-                actions.Margin = below ? new Thickness(0, AppTheme.Space.XXS, 0, 0) : default;
-            }
-            return base.MeasureOverride(availableSize);
-        }
+        body.Children.Add(RichBlocks.Quote(pair, read));
     }
 }

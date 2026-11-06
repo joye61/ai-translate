@@ -1,7 +1,6 @@
 using System.Diagnostics;
-using KokoroSharp;
-using KokoroSharp.Core;
-using KokoroSharp.Processing;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 
 namespace AiTranslate.Speech;
 
@@ -15,8 +14,6 @@ public sealed partial class KokoroSpeechService
         public CancellationTokenSource Cancellation { get; } = cancellation;
         public CancellationToken Token { get; } = cancellation.Token;
         public SpeechPlayback Playback { get; } = playback;
-        public KokoroJob? Job { get; set; }
-        public TaskCompletionSource? Completion { get; set; }
     }
 
     public bool IsSpeaking
@@ -24,27 +21,14 @@ public sealed partial class KokoroSpeechService
         get { lock (_speechGate) return _reading?.Playback.IsPlaying == true; }
     }
 
-    private void WireKokoroCallbacks(KokoroTTS tts)
+    private void Started(Reading reading, string status)
     {
-        tts.OnSpeechStarted += packet =>
+        lock (_speechGate)
         {
-            lock (_speechGate)
-            {
-                if (_reading is not { } reading || reading.Job != packet.RelatedJob || reading.Token.IsCancellationRequested) return;
-                reading.Playback.SetPlaying(true);
-                UpdateStatus($"{ISpeechSynthesisService.DisplayName}正在朗读");
-            }
-        };
-        tts.OnSpeechCompleted += packet =>
-        {
-            lock (_speechGate)
-                if (_reading?.Job == packet.RelatedJob) _reading?.Completion?.TrySetResult();
-        };
-        tts.OnSpeechCanceled += packet =>
-        {
-            lock (_speechGate)
-                if (_reading?.Job == packet.RelatedJob) _reading?.Completion?.TrySetCanceled();
-        };
+            if (_reading != reading || reading.Token.IsCancellationRequested) return;
+            reading.Playback.SetState(SpeechPlaybackState.Playing);
+            UpdateStatus(status);
+        }
     }
 
     public Task SpeakAsync(string text, SpeechAccent accent = SpeechAccent.AmericanEnglish,
@@ -105,12 +89,22 @@ public sealed partial class KokoroSpeechService
             if (_disposed || token.IsCancellationRequested) return;
             StopLocked();
             _reading = reading;
+            reading.Playback.SetState(SpeechPlaybackState.Preparing);
         }
+        var completed = false;
         try
         {
-            await speak(reading).ConfigureAwait(false);
+            // Even a fully cached clip must open its audio device off the UI thread.
+            await Task.Run(() => speak(reading), reading.Token).ConfigureAwait(false);
+            completed = true;
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) when (reading.Token.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(ex);
+            lock (_speechGate)
+                if (_reading == reading) UpdateStatus("朗读失败，请检查音频输出设备。");
+        }
         finally
         {
             lock (_speechGate)
@@ -121,8 +115,9 @@ public sealed partial class KokoroSpeechService
                     else
                     {
                         _reading = null;
-                        reading.Playback.SetPlaying(false);
-                        UpdateStatus(reading.Job is null ? "语音就绪" : "朗读完成");
+                        var played = reading.Playback.IsPlaying;
+                        reading.Playback.SetState(SpeechPlaybackState.Idle);
+                        if (played && completed) UpdateStatus("朗读完成");
                     }
                 }
             }
@@ -134,27 +129,23 @@ public sealed partial class KokoroSpeechService
     {
         var token = reading.Token;
         var clampedSpeed = Math.Clamp(speed, .5f, 1.8f);
-        if (await EnsureKokoroModelReadyAsync(token).ConfigureAwait(false))
+        // An explicit preload retries a failed model. Subsequent readings can use system speech immediately.
+        Task<bool> modelReady;
+        lock (_modelGate) modelReady = _modelLoad?.WaitAsync(token) ?? EnsureKokoroModelReadyAsync(token);
+        if (await modelReady.ConfigureAwait(false) && _kokoro is { } engine)
         {
+            var began = false;
             try
             {
-                var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                await Task.Run(() =>
+                token.ThrowIfCancellationRequested();
+                await engine.SpeakAsync(FormatKokoroIpaInput(text, ipa), ResolveKokoroVoice(accent, voiceId), clampedSpeed, () =>
                 {
-                    var voice = ResolveKokoroVoice(accent, voiceId);
-                    var prepared = FormatKokoroIpaInput(text, ipa);
-                    lock (_speechGate)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        reading.Job = _kokoro!.Speak(prepared, voice, new KokoroTTSPipelineConfig { Speed = clampedSpeed }).Job;
-                        reading.Completion = completion;
-                    }
+                    began = true;
+                    Started(reading, $"{ISpeechSynthesisService.DisplayName}正在朗读");
                 }, token).ConfigureAwait(false);
-                // Speak only enqueues synthesis. The matching audio callback finishes this part.
-                await completion.Task.WaitAsync(token).ConfigureAwait(false);
-                return;
+                if (began) return;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!began && !token.IsCancellationRequested && ex is not OperationCanceledException)
             {
                 Debug.WriteLine(ex);
                 UpdateStatus("离线朗读暂不可用，正在切换至系统语音。");
@@ -166,63 +157,79 @@ public sealed partial class KokoroSpeechService
 
     private async Task SpeakWithPlatformNativeTtsAsync(Reading reading, string text, SpeechAccent accent, float speed)
     {
+        ProcessStartInfo? psi = null;
+        if (OperatingSystem.IsWindows())
+        {
+            SpeakWithSapi(reading, text, accent, speed);
+            return;
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            var voiceName = accent switch { SpeechAccent.BritishEnglish => "Daniel", SpeechAccent.MandarinChinese => "Tingting",
+                SpeechAccent.Japanese => "Kyoko", _ => "Samantha" };
+            var wpm = Math.Clamp((int)Math.Round(175 * speed), 90, 320).ToString();
+            psi = new ProcessStartInfo("say", ["-v", voiceName, "-r", wpm, text])
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false
+            };
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            var ratePercent = Math.Clamp((int)Math.Round((speed - 1.0f) * 100), -60, 80).ToString();
+            var lang = accent switch { SpeechAccent.BritishEnglish => "en-gb", SpeechAccent.MandarinChinese => "zh",
+                SpeechAccent.Japanese => "ja", _ => "en-us" };
+            psi = new ProcessStartInfo("spd-say", ["--wait", "-l", lang, "-r", ratePercent, text])
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false
+            };
+        }
+
+        if (psi is null) return;
+        using var proc = Process.Start(psi);
+        if (proc is null) return;
+        using var stop = reading.Token.Register(() =>
+        {
+            try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { } // Process already exited.
+            catch (System.ComponentModel.Win32Exception ex) { Debug.WriteLine(ex); }
+        });
+        Started(reading, $"系统语音正在朗读 · {speed:F1}x");
+        await proc.WaitForExitAsync(reading.Token).ConfigureAwait(false);
+        if (proc.ExitCode != 0) throw new InvalidOperationException("The system speech engine could not play this text.");
+    }
+
+    [SupportedOSPlatform("windows")]
+    private void SpeakWithSapi(Reading reading, string text, SpeechAccent accent, float speed)
+    {
+        var language = accent switch { SpeechAccent.BritishEnglish => "809", SpeechAccent.MandarinChinese => "804",
+            SpeechAccent.Japanese => "411", _ => "409" };
+        dynamic voice = Activator.CreateInstance(Type.GetTypeFromProgID("SAPI.SpVoice", throwOnError: true)!)!;
         try
         {
-            ProcessStartInfo? psi = null;
-            if (OperatingSystem.IsWindows())
+            dynamic voices = voice.GetVoices("Language=" + language, "");
+            try
             {
-                // SAPI rate ranges from -10 to +10
-                var sapiRate = Math.Clamp((int)Math.Round((speed - 1.0f) * 8), -6, 6);
-                var cultureHint = accent == SpeechAccent.BritishEnglish ? "en-GB" : "en-US";
-                var psCommand = $"Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; try {{ $s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::NotSet, [System.Speech.Synthesis.VoiceAge]::NotSet, 0, [System.Globalization.CultureInfo]::GetCultureInfo('{cultureHint}')) }} catch {{}}; $s.Rate = {sapiRate}; [Console]::WriteLine('ready'); $s.Speak($env:AI_TRANSLATE_SPEECH_TEXT)";
-                psi = new ProcessStartInfo("powershell", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", psCommand])
+                if (voices.Count > 0)
                 {
-                    CreateNoWindow = true,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true
-                };
-                psi.Environment["AI_TRANSLATE_SPEECH_TEXT"] = text;
+                    dynamic preferred = voices.Item(0);
+                    try { voice.Voice = preferred; }
+                    finally { Marshal.ReleaseComObject(preferred); }
+                }
             }
-            else if (OperatingSystem.IsMacOS())
-            {
-                var voiceName = accent == SpeechAccent.BritishEnglish ? "Daniel" : "Samantha";
-                var wpm = Math.Clamp((int)Math.Round(175 * speed), 90, 320).ToString();
-                psi = new ProcessStartInfo("say", ["-v", voiceName, "-r", wpm, text])
-                {
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                };
-            }
-            else if (OperatingSystem.IsLinux())
-            {
-                var ratePercent = Math.Clamp((int)Math.Round((speed - 1.0f) * 100), -60, 80).ToString();
-                var lang = accent == SpeechAccent.BritishEnglish ? "en-gb" : "en-us";
-                psi = new ProcessStartInfo("spd-say", ["--wait", "-l", lang, "-r", ratePercent, text])
-                {
-                    CreateNoWindow = true,
-                    UseShellExecute = false
-                };
-            }
-
-            if (psi is null) return;
-            using var proc = Process.Start(psi);
-            if (proc is null) return;
-            using var stop = reading.Token.Register(() =>
-            {
-                try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); }
-                catch (InvalidOperationException) { } // Process already exited.
-                catch (System.ComponentModel.Win32Exception ex) { Debug.WriteLine(ex); }
-            });
-            if (psi.RedirectStandardOutput && await proc.StandardOutput.ReadLineAsync(reading.Token).ConfigureAwait(false) != "ready") return;
-            lock (_speechGate)
-            {
-                reading.Token.ThrowIfCancellationRequested();
-                reading.Playback.SetPlaying(true);
-                UpdateStatus($"系统语音正在朗读 · {speed:F1}x");
-            }
-            await proc.WaitForExitAsync(reading.Token).ConfigureAwait(false);
+            finally { Marshal.ReleaseComObject(voices); }
+            voice.Rate = Math.Clamp((int)Math.Round((speed - 1) * 8), -6, 6);
+            reading.Token.ThrowIfCancellationRequested();
+            voice.Speak(text, 1 | 16); // Asynchronous, literal text (never SAPI XML).
+            Started(reading, $"系统语音正在朗读 · {speed:F1}x");
+            while (!voice.WaitUntilDone(20)) reading.Token.ThrowIfCancellationRequested();
         }
-        catch (System.ComponentModel.Win32Exception ex) { Debug.WriteLine(ex); }
+        finally
+        {
+            try { if (reading.Token.IsCancellationRequested) voice.Speak("", 1 | 2); } // Purge pending speech.
+            finally { Marshal.ReleaseComObject(voice); }
+        }
     }
 
     public void Stop()
@@ -235,11 +242,6 @@ public sealed partial class KokoroSpeechService
         if (_reading is not { } reading) return;
         _reading = null;
         reading.Cancellation.Cancel();
-        reading.Playback.SetPlaying(false);
-        if (reading.Job is not null)
-        {
-            try { _kokoro?.StopPlayback(); }
-            catch (InvalidOperationException ex) { Debug.WriteLine(ex); }
-        }
+        reading.Playback.SetState(SpeechPlaybackState.Idle);
     }
 }

@@ -59,6 +59,11 @@
             </FluentTheme.Palettes>
         </FluentTheme>
 
+        <!-- Keep the full text line hittable when a drag starts between glyphs. -->
+        <Style Selector=".dictionary-reading :is(SelectableTextBlock)">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+
         <!-- Button also covers checkboxes and switches. ComboBoxItem derives from ListBoxItem. -->
         <Style Selector=":is(Button):pointerover:not(:disabled), ComboBox:pointerover:not(:disabled),
                          :is(ListBoxItem):pointerover:not(:disabled), MenuItem:pointerover:not(:disabled),
@@ -116,6 +121,10 @@
             <Setter Property="Background" Value="{x:Static local:AppTheme.PressedBg}" />
             <Setter Property="BorderBrush" Value="Transparent" />
         </Style>
+        <Style Selector=".dictionary-reading Button.compact:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Opacity" Value="0.6" />
+        </Style>
         <Style Selector="Button.compact local|MdiIcon">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.TextSecondary}" />
         </Style>
@@ -158,11 +167,11 @@
         <Style Selector="Button.speech local|MdiIcon">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.TextSecondary}" />
         </Style>
-        <Style Selector="Button.speech.playing /template/ ContentPresenter#PART_ContentPresenter">
+        <Style Selector="Button.speech.preparing /template/ ContentPresenter#PART_ContentPresenter, Button.speech.playing /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{x:Static local:AppTheme.AccentSoft}" />
             <Setter Property="BorderBrush" Value="{x:Static local:AppTheme.Accent}" />
         </Style>
-        <Style Selector="Button.speech.playing local|MdiIcon">
+        <Style Selector="Button.speech.preparing local|MdiIcon, Button.speech.playing local|MdiIcon">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.AccentBright}" />
         </Style>
         <Style Selector="Button.caption local|MdiIcon">

@@ -1,11 +1,12 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using AiTranslate.Core;
 using Panlingo.LanguageIdentification.FastText;
 
 namespace AiTranslate.Ai;
 
-public static class DictionaryTranslationDirection
+public static partial class DictionaryTranslationDirection
 {
     public const string AutoId = "auto";
     private static readonly TranslationLanguage Automatic = new(AutoId, "自动 · 系统语言", "自动");
@@ -51,8 +52,16 @@ public static class DictionaryTranslationDirection
             : reader;
     }
 
+    [GeneratedRegex(@"「[^「」\r\n]*」|『[^『』\r\n]*』|“[^“”\r\n]*”|""[^""\r\n]*""")]
+    private static partial Regex QuotedExamples();
+
     private static string? DetectSource(string text)
     {
+        // A quoted foreign example can contain an otherwise distinctive script. Use the surrounding
+        // sentence for direction when it has enough letters, but translate the original input verbatim.
+        var surrounding = QuotedExamples().Replace(text, " ").Trim();
+        if (surrounding.Length < text.Length && surrounding.EnumerateRunes().Count(Rune.IsLetter) >= 4)
+            text = surrounding;
         var han = 0;
         var otherWords = 0;
         var inWord = false;

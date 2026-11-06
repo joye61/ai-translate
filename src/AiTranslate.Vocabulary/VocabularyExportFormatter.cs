@@ -43,6 +43,7 @@ internal static class VocabularyExportFormatter
             }
             if (!string.IsNullOrWhiteSpace(item.UserPersonalNote))
                 sb.AppendLine($"- **个人笔记**：{item.UserPersonalNote}");
+            foreach (var note in LearningNotes(item)) sb.AppendLine($"- {note}");
             sb.AppendLine();
         }
         return sb.ToString();
@@ -59,10 +60,11 @@ internal static class VocabularyExportFormatter
             static string Clean(string s) => s.Replace("\t", " ").Replace("\r", "").Replace("\n", "<br>");
             var example = item.Examples.FirstOrDefault() is { } ex ? $"{ex.SourceSentence}<br>{ex.TranslatedSentence}" : item.ContextSentence;
             sb.Append(Clean(item.Headword)).Append('\t')
-              .Append(Clean(string.IsNullOrWhiteSpace(item.LiteralTranslation) ? item.Translation :
-                  $"自然译文：{item.Translation}\n直译对照：{item.LiteralTranslation}")).Append('\t')
+              .Append(Clean((string.IsNullOrWhiteSpace(item.LiteralTranslation) ? item.Translation :
+                  $"自然译文：{item.Translation}\n直译对照：{item.LiteralTranslation}") +
+                  string.Concat(LearningNotes(item, includeMnemonics: false).Select(note => "\n" + System.Net.WebUtility.HtmlEncode(note))))).Append('\t')
               .Append(Clean(item.UsPhonetic)).Append('\t')
-              .Append(Clean(InlineMarkup.Strip(item.MemoryMnemonic))).Append('\t')
+              .Append(Clean(System.Net.WebUtility.HtmlEncode(MnemonicText(item)))).Append('\t')
               .Append(Clean(example)).Append('\t')
               .AppendLine(Clean(string.Join(" ", item.Tags)));
         }
@@ -72,7 +74,7 @@ internal static class VocabularyExportFormatter
     public static string ToCsv(IReadOnlyList<VocabularyEntry> items)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Headword,Phonetic,Translation,ItemType,Stage,MasteryLevel,Etymology,Mnemonic,ContextSentence,PersonalNote,Tags,LiteralTranslation");
+        sb.AppendLine("Headword,Phonetic,Translation,ItemType,Stage,MasteryLevel,Etymology,Mnemonic,ContextSentence,PersonalNote,Tags,LiteralTranslation,LearningNotes");
         static string CsvEscape(string s) => $"\"{s.Replace("\"", "\"\"")}\"";
         foreach (var item in items)
         {
@@ -83,16 +85,53 @@ internal static class VocabularyExportFormatter
                 CsvEscape(item.ItemType.ToString()),
                 CsvEscape(item.Stage.ToString()),
                 item.MasteryLevel,
-                CsvEscape(InlineMarkup.Strip(item.EtymologyAndRoot)),
-                CsvEscape(InlineMarkup.Strip(item.MemoryMnemonic)),
+                CsvEscape(EtymologyText(item)),
+                CsvEscape(MnemonicText(item)),
                 CsvEscape(item.ContextSentence),
                 CsvEscape(item.UserPersonalNote),
                 CsvEscape(string.Join(";", item.Tags)),
-                CsvEscape(item.LiteralTranslation ?? "")));
+                CsvEscape(item.LiteralTranslation ?? ""),
+                CsvEscape(string.Join("\n", LearningNotes(item, includeMnemonics: false, includeEtymology: false)))));
         }
         return sb.ToString();
     }
 
     public static string ToJson(IReadOnlyList<VocabularyEntry> items) =>
         JsonSerializer.Serialize(items, VocabularyService.JsonOptions);
+
+    private static string EtymologyText(VocabularyEntry item) => string.Join("\n",
+        item.EtymologyNotes.Select(n => $"{InlineMarkup.Strip(n.Title)}：{InlineMarkup.Strip(n.Explanation)}")
+            .Prepend(InlineMarkup.Strip(item.EtymologyAndRoot)).Where(s => !string.IsNullOrWhiteSpace(s)));
+
+    private static string MnemonicText(VocabularyEntry item) => string.Join("\n",
+        item.Mnemonics.Select(m => $"{m.Method}：{m.Cue} — {InlineMarkup.Strip(m.Explanation)}")
+            .Prepend(InlineMarkup.Strip(item.MemoryMnemonic)).Where(s => !string.IsNullOrWhiteSpace(s)));
+
+    private static IEnumerable<string> LearningNotes(VocabularyEntry item, bool includeMnemonics = true, bool includeEtymology = true)
+    {
+        static string Example(BilingualExample? e) => e is null ? "" : $" — {e.SourceSentence} / {e.TranslatedSentence}";
+        foreach (var pair in item.UsageContrasts)
+        {
+            yield return $"用法对照：{pair.LeftForm} — {InlineMarkup.Strip(pair.LeftUse)}{Example(pair.LeftExample)}";
+            yield return $"对照表达：{pair.RightForm} — {InlineMarkup.Strip(pair.RightUse)}{Example(pair.RightExample)}";
+        }
+        foreach (var note in item.UsageGuidance)
+            yield return $"用法 · {InlineMarkup.Strip(note.Title)}：{InlineMarkup.Strip(note.Explanation)}{Example(note.Example)}";
+        if (!string.IsNullOrWhiteSpace(item.GrammarOrUsageNote))
+            yield return $"用法说明：{InlineMarkup.Strip(item.GrammarOrUsageNote)}";
+        foreach (var drill in item.PronunciationDrills)
+            yield return $"发音 · {InlineMarkup.Strip(drill.Focus)}：{drill.Text} — {InlineMarkup.Strip(drill.Tip)}";
+        if (!string.IsNullOrWhiteSpace(item.PronunciationTip))
+            yield return $"发音提示：{InlineMarkup.Strip(item.PronunciationTip)}";
+        if (includeEtymology)
+            foreach (var note in item.EtymologyNotes)
+                yield return $"词源 · {InlineMarkup.Strip(note.Title)}：{InlineMarkup.Strip(note.Explanation)}";
+        if (includeMnemonics)
+            foreach (var strategy in item.Mnemonics)
+                yield return $"助记 · {InlineMarkup.Strip(strategy.Method)}：{strategy.Cue} — {InlineMarkup.Strip(strategy.Explanation)}";
+        foreach (var note in item.CulturalNotes)
+            yield return $"文化 · {InlineMarkup.Strip(note.Title)}：{InlineMarkup.Strip(note.Explanation)}";
+        foreach (var evidence in item.ToneEvidence.Where(e => DictionaryTextMatch.IndexOf(item.Headword, e.Quote, comparison: StringComparison.Ordinal) >= 0))
+            yield return $"语气 · {InlineMarkup.Strip(evidence.Aspect)}：{evidence.Quote} — {InlineMarkup.Strip(evidence.Explanation)}";
+    }
 }

@@ -52,27 +52,30 @@ public sealed partial class AiDictionaryService
         finally { (transport as IDisposable)?.Dispose(); }
     }
 
+    private static object? CoverageReference(DictionaryEntryResult entry)
+    {
+        var hints = EnglishLexicalHints.For(entry);
+        if (hints is null) return null;
+        var represented = entry.Senses.Select(s => LexicalPart.From(s.PartOfSpeech).Abbreviation).ToHashSet();
+        return new { missing_parts = hints.Parts.Keys.Where(p => entry.ItemType == VocabularyItemType.Word && !represented.Contains(p)),
+            usage_clues = hints.Parts, particle_verbs = hints.PhrasalVerbs };
+    }
+
     private static async Task<DictionaryEntryResult> RequestLexicalAdditionsAsync(IAiTransport transport, DictionaryEntryResult entry,
         string readerLanguage, string? contextSentence, CancellationToken token, bool reviewLookup)
     {
-        var hints = EnglishLexicalHints.For(entry);
-        var represented = entry.Senses.Select(s => LexicalPart.From(s.PartOfSpeech).Abbreviation).ToHashSet();
         var data = new
         {
             source_text = entry.SourceText, source_language = entry.DetectedSourceLanguage, target_language = entry.TargetLanguage,
             reader_language = readerLanguage, item_type = entry.ItemType.ToString(),
-            english_reference = hints is null ? null : new
-            {
-                missing_parts = hints.Parts.Keys.Where(p => entry.ItemType == VocabularyItemType.Word && !represented.Contains(p)),
-                usage_clues = hints.Parts, particle_verbs = hints.PhrasalVerbs
-            },
+            english_reference = CoverageReference(entry),
             context_sentence = contextSentence, primary_translation = entry.PrimaryTranslation,
             inflections = entry.Inflections,
             wordFamily = entry.WordFamily,
             senses = entry.Senses.Select((s, i) => new { id = $"sense-{i}", s.PartOfSpeech, s.DefinitionZh,
                 s.DefinitionEn, s.GrammarLabel, s.GrammarPattern, usageCases = s.UsageCases }),
             collocations = entry.Collocations.Select(c => new { c.Phrase, c.Meaning }),
-            usage_contrasts = entry.UsageContrasts, entry.UsageNotes, entry.WordChoice, entry.CommonMistakes
+            usage_contrasts = entry.UsageContrasts, entry.UsageNotes, entry.UsageGuidance, entry.WordChoice, entry.CommonMistakes
         };
         var messages = new JsonObject[]
         {
@@ -87,14 +90,14 @@ public sealed partial class AiDictionaryService
                 返回 {"senses":[],"collocations":[],"usageContrasts":[],"senseGrammar":[],"inflections":[],"wordFamily":[]}，没有可靠补充的数组留空。
                 对已有义项补 grammarLabel 或 usageCases，用 senseGrammar，每项带回输入中的 id（如 sense-0）、原样的 partOfSpeech 和 definitionZh，不改已有内容。新义项的 usageCases 随 senses 给出。只有条件会影响冠词、数、词形、句法或意思时才给 usageCases，每项为 {condition,grammar,expression,meaning}，写清条件、语法属性、保留关键成分的源语短表达及其译义。例如 coffee 泛指饮品和按杯点单应展示不同表达；paper 的材料义与论文义应在各自义项说明。条件已由用法或例句说清时避免重复。
                 inflections 按所属词性补各义可共享的 {partOfSpeech,label,value}：如复数、第三人称单数、过去式、分词、比较级和最高级。仅个别义项适用的形式归入其 usageCases，保留地域、语域和常用程度等限定；按源语语法补缺。
-                wordFamily 可补一两项影响选词的 {label,value,partOfSpeech,relation,usage,expression}。label 为目标词的简短中文释义，value 为源语单词，partOfSpeech 为该词词性，usage 说明选择条件或意义差别，expression 为含 value 原拼写的自然短表达。relation 仅用 derived（直接派生）、counterpart（功能对应，如 good/well）、sameForm（同形跨词性，须有另一词性和体现功能的短例）、confusable（近形易混，如 hard/hardly）。已讲清的同形义项不重列；切勿机械加 -ly。
+                wordFamily 按各主要义补齐影响选词的常用 {label,value,partOfSpeech,relation,usage,expression}。label 为目标词的简短中文释义，value 为源语单词，partOfSpeech 为该词词性，usage 说明选择条件或意义差别，expression 为含 value 原拼写的自然短表达。relation 仅用 derived（直接派生）、counterpart（功能对应，如 good/well）、sameForm（同形跨词性，须有另一词性和体现功能的短例）、confusable（近形易混，如 hard/hardly）。已讲清的同形义项不重列；切勿机械加 -ly。
                 senses 每项含 partOfSpeech、definitionZh（读者母语释义）、example；grammarLabel 标明本义适用的可数性、及物性、人称与格或可分级性，可选 definitionEn、scenario、grammarPattern、register。
                 若没有语境且新义项的一项常用目标语译法在主译文中缺失，在该义项的 headTranslation 给出这一个简短目标语译法。其他情况省略。不得替换原有译文。
                 collocations 每项含 phrase（源语表达）、meaning（目标语译法）、example，可选 senseHint。
                 两类的 example 都必须含源语完整句 sourceSentence、目标语完整译句 translatedSentence 和原句中实际出现且体现新增用法的 highlightTerm。
                 每个新增义项的 example 还要给 translationQuote，从 translatedSentence 逐字摘出体现本义的短译语。若其措辞与 definitionZh 不同，再给 definitionQuote，原样摘出释义里与短译语等义的部分。例如“瘪了”对应“（轮胎）瘪的”。逐一对照这两处与源语例句，尤其检查动作方向、施受关系与褒贬；“下架”不能证明“推出”。例句不能证实本义就舍弃这一项。
                 若查的是单词，短语词头及例句的高亮片段都应包含该词或输入中明确列出的一个词形。
-                usageContrasts 每项含 leftForm、leftUse、rightForm、rightUse，两种自然表达与各自选用条件。禁止列错误表达充当合法对照。
+                {{UsageContrastGuide}}
                 义项释义、选用条件和辨析的说明文字使用用户母语 reader_language。译文、英文简释和双语例句各自保留原定语言。
                 """ },
             new() { ["role"] = "user", ["content"] = JsonSerializer.Serialize(data, JsonSerializerOptions.Web) }
@@ -135,7 +138,7 @@ public sealed partial class AiDictionaryService
             if ((requireTranslationQuote || quote.Length > 0) && (DictionaryTextMatch.IndexOf(example.TranslatedSentence, quote) < 0 ||
                 matchDefinition && DictionaryTextMatch.IndexOf(meaning, quote) < 0 &&
                 DictionaryTextMatch.IndexOf(meaning, GetString(evidence, "definitionQuote").Trim()) < 0)) continue;
-            var cases = entry.ItemType.IsWordOrTerm() ? ReadUsageCases(row) : [];
+            var cases = !entry.ItemType.IsPassage() ? ReadUsageCases(row) : [];
             if (!ReferencesWord(example.HighlightTerm) && !cases.Any(c => DictionaryTextMatch.IndexOf(c.Expression, example.HighlightTerm) >= 0)) continue;
             if (senses.Any(s => LexicalPart.From(s.PartOfSpeech) == LexicalPart.From(pos) && SameText(s.DefinitionZh, meaning))) continue;
             senses.Add(new(pos, meaning, GetString(row, "definitionEn"), GetLabels(row, "scenario"),
@@ -167,7 +170,7 @@ public sealed partial class AiDictionaryService
                 PrimaryTranslation = translations.Count == 0 ? entry.PrimaryTranslation :
                     string.Join(entry.TargetLanguage.StartsWith("zh", StringComparison.Ordinal) ? "；" : "; ", translations.Prepend(entry.PrimaryTranslation))
             };
-        return entry.ItemType.IsWordOrTerm() ? FillGrammarGaps(updated, root, Objects(root, "senseGrammar"), entry.Senses) : updated;
+        return !entry.ItemType.IsPassage() ? FillGrammarGaps(updated, root, Objects(root, "senseGrammar"), entry.Senses) : updated;
 
         bool ReferencesWord(string expression) => entry.ItemType != VocabularyItemType.Word ||
             forms.Any(f => DictionaryTextMatch.IndexOf(expression, f) >= 0);
@@ -185,8 +188,7 @@ public sealed partial class AiDictionaryService
             if (at < 0) continue;
             var current = senses[at];
             var label = GetLabels(row, "grammarLabel").Trim();
-            var additions = ReadUsageCases(row).Where(c => !current.UsageCases.Any(old => SameCase(old, c)))
-                .Take(Math.Max(0, MaxUsageCases - current.UsageCases.Count));
+            var additions = ReadUsageCases(row).Where(c => !current.UsageCases.Any(old => SameCase(old, c)));
             var cases = current.UsageCases.Concat(additions).ToArray();
             var updated = current with { GrammarLabel = string.IsNullOrWhiteSpace(current.GrammarLabel) ? label : current.GrammarLabel,
                 UsageCases = cases };
@@ -194,7 +196,7 @@ public sealed partial class AiDictionaryService
             senses[at] = updated;
             changed = true;
         }
-        foreach (var form in ReadInflections(root).Take(16))
+        foreach (var form in ReadInflections(root))
         {
             var part = LexicalPart.From(form.PartOfSpeech).Name;
             if (part.Length == 0 || !senses.Any(s => LexicalPart.From(s.PartOfSpeech).Name == part)) continue;
@@ -206,7 +208,8 @@ public sealed partial class AiDictionaryService
             changed = true;
         }
         var englishWord = entry.ItemType == VocabularyItemType.Word && DictionaryTranslationDirection.FromSourceCode(entry.DetectedSourceLanguage)?.Id == "en";
-        var family = ReadWordFamily(root, entry.SourceText, englishWord, senses, entry.WordFamily);
+        var family = EntryBlockCatalog.Applies(entry.ItemType, EntryBlock.WordFamily)
+            ? ReadWordFamily(root, entry.SourceText, englishWord, senses, entry.WordFamily) : entry.WordFamily;
         return changed || !ReferenceEquals(family, entry.WordFamily)
             ? entry with { Senses = senses, Inflections = forms, WordFamily = family } : entry;
     }

@@ -55,12 +55,32 @@ public sealed class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            VocabularyService vocabularyService;
+            try { vocabularyService = new VocabularyService(); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+            {
+                var message = TextStyles.Selectable(ex.Message, TextRole.Body);
+                message.Margin = new Thickness(AppTheme.Space.XL);
+                desktop.MainWindow = new Window
+                {
+                    Title = "无法打开生词本", Width = 560, SizeToContent = SizeToContent.Height,
+                    Background = AppTheme.WindowBg, Content = message
+                };
+                base.OnFrameworkInitializationCompleted();
+                return;
+            }
             _platform = CreatePlatformService();
             var selectionPrivacy = _platform is WindowsDesktopPlatformService windows ? new WindowsSelectionPrivacy(windows) : null;
             var settingsStore = new AppSettingsStore();
-            var vocabularyService = new VocabularyService();
+            var cache = new DictionaryEntryCache();
+            _ = Task.Run(() =>
+            {
+                try { cache.UpgradeExistingDatabase(); }
+                // A busy or unavailable database can retry the migration on the next lookup.
+                catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Local cache upgrade deferred: {0}", ex.Message); }
+            });
             var dictionaryService = new AiDictionaryService(() => settingsStore.CreateTransport(),
-                new DictionaryEntryCache(), vocabularyService.FindGlossaryTerms, vocabularyService.RefreshCollectedEntries);
+                cache, vocabularyService.FindGlossaryTerms, vocabularyService.RefreshCollectedEntries);
             _speechService = new KokoroSpeechService();
 
             var mainWindow = new MainWindow(

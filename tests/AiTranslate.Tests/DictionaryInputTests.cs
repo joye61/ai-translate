@@ -26,7 +26,7 @@ public sealed class DictionaryInputTests
         .UseHeadless(new AvaloniaHeadlessPlatformOptions());
 
     [Fact]
-    public async Task SelectionPopupStreamsWithoutPlaceholderAndIgnoresSupersededSnapshots()
+    public async Task SelectionPopupStreamsWithSkeletonAndIgnoresSupersededSnapshots()
     {
         await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
         var directory = Directory.CreateTempSubdirectory();
@@ -48,7 +48,9 @@ public sealed class DictionaryInputTests
                 editor.SelectionEnd = 10;
                 try
                 {
-                    var capture = new CapturedTextEvent(" ✨“draft,” ", TranslationTriggerSource.SelectionPopup, new PointD(10, 10), "阅读器");
+                    var workArea = popup.Screens.Primary!.WorkingArea;
+                    var capture = new CapturedTextEvent(" ✨“draft,” ", TranslationTriggerSource.SelectionPopup,
+                        new PointD(workArea.Right - 12, workArea.Bottom - 12), "阅读器");
                     _ = popup.ShowAndTranslateAsync(capture with { Text = "，✨" });
                     Assert.Empty(dictionary.Requests);
                     Assert.False(popup.IsVisible);
@@ -61,7 +63,33 @@ public sealed class DictionaryInputTests
                     Assert.False(popup.ShowActivated);
                     Assert.True(editor.IsFocused);
                     Assert.Equal("selected", editor.SelectedText);
-                    Assert.Equal(0, popup.GetVisualDescendants().OfType<SelectionPopupBody>().Single().DesiredSize.Height);
+                    Assert.Single(popup.GetVisualDescendants().OfType<LoadingSkeleton>());
+                    Dispatcher.UIThread.RunJobs();
+                    popup.UpdateLayout();
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                    Dispatcher.UIThread.RunJobs();
+                    AssertInsideWorkingArea();
+                    var header = popup.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "SelectionPopupHeader");
+                    foreach (var point in new[]
+                    {
+                        new Point(header.Bounds.Width / 2, 4), // top padding
+                        new Point(4, header.Bounds.Height / 2), // side padding
+                        new Point(header.Bounds.Width / 2, header.Bounds.Height - 4) // below buttons
+                    })
+                    {
+                        var actual = popup.InputHitTest(header.TranslatePoint(point, popup)!.Value);
+                        Assert.Same(header, actual);
+                    }
+                    if (OperatingSystem.IsWindows())
+                    {
+                        var start = header.TranslatePoint(new Point(header.Bounds.Width / 2, 6), popup)!.Value;
+                        var before = popup.Position;
+                        popup.MouseDown(start, MouseButton.Left);
+                        popup.MouseMove(start - new Point(40, 0), RawInputModifiers.LeftMouseButton);
+                        popup.MouseUp(start, MouseButton.Left);
+                        Assert.True(popup.Position.X < before.X);
+                        AssertInsideWorkingArea();
+                    }
                     var preview = new DictionaryEntryResult
                     {
                         SourceText = "draft", DetectedSourceLanguage = "en", PrimaryTranslation = "草稿", LiteralTranslation = "起草的文本",
@@ -75,11 +103,14 @@ public sealed class DictionaryInputTests
                     first.Usable(preview with { Senses = [], LiteralTranslation = "" });
                     first.Fields(preview);
                     Dispatcher.UIThread.RunJobs();
+                    FinishFrames();
                     Assert.Equal(["草稿", "尚待修改的初稿", "自然拼读"],
                         VisibleText().Where(t => t is "草稿" or "尚待修改的初稿" or "自然拼读"));
                     Assert.Contains("直译对照", VisibleText());
                     Assert.Contains(preview.LiteralTranslation, VisibleText());
                     Assert.DoesNotContain("正在整理释义…", VisibleText());
+                    Assert.False(first.Completion.Task.IsCompleted);
+                    Assert.Empty(popup.GetVisualDescendants().OfType<LoadingSkeleton>());
                     Assert.True(bookmark.IsEnabled);
                     Assert.Null(vocabulary.FindByHeadword("draft"));
                     bookmark.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -92,8 +123,10 @@ public sealed class DictionaryInputTests
 
                     first.Fields(preview with { Senses = [new("n.", "草稿"), new("noun", "征兵"), new("n.", "气流"), new("v.", "起草")] });
                     Dispatcher.UIThread.RunJobs();
+                    FinishFrames();
                     Assert.Contains("草稿；征兵；气流", VisibleText());
                     Assert.Contains("起草", VisibleText());
+                    AssertInsideWorkingArea();
 
                     _ = popup.ShowAndTranslateAsync(capture with { Text = "note" });
                     Assert.False(first.Token.IsCancellationRequested);
@@ -128,10 +161,20 @@ public sealed class DictionaryInputTests
                     dictionary.Requests[1].Completion.SetResult(note with { Origin = DictionaryResultOrigin.Cache });
                     Dispatcher.UIThread.RunJobs();
                     Assert.Contains("笔记", VisibleText());
+                    Assert.Empty(popup.GetVisualDescendants().OfType<LoadingSkeleton>());
                     Assert.DoesNotContain("直译对照", VisibleText());
                     Assert.Null(vocabulary.FindByHeadword("note"));
                     bookmark.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Assert.Equal(TranslationTriggerSource.SelectionPopup, vocabulary.FindByHeadword("note")?.CaptureSource);
+
+                    void FinishFrames()
+                    {
+                        var body = popup.GetVisualDescendants().OfType<SelectionPopupBody>().Single();
+                        for (var i = 0; i < 60; i++) body.AdvanceFrame(TimeSpan.FromMilliseconds(16));
+                    }
+
+                    void AssertInsideWorkingArea() => Assert.True(workArea.Contains(new PixelRect(
+                        popup.Position, PixelSize.FromSize(popup.ClientSize, popup.RenderScaling))));
 
                     string?[] VisibleText()
                     {
@@ -178,11 +221,13 @@ public sealed class DictionaryInputTests
             Assert.Equal("停止生成", AutomationProperties.GetName(send));
             request.Preview("地位");
             Dispatcher.UIThread.RunJobs();
+            view.GetVisualDescendants().OfType<DictionaryTranslations>().Single().AdvanceFrame(TimeSpan.FromMilliseconds(100));
             Assert.Contains("地位", Messages(view));
 
             window.KeyTextInput("“another word，”");
             request.Preview("地位较高");
             Dispatcher.UIThread.RunJobs();
+            view.GetVisualDescendants().OfType<DictionaryTranslations>().Single().AdvanceFrame(TimeSpan.FromMilliseconds(100));
             Assert.Contains("地位较高", Messages(view));
             request.Complete("地位较高");
             Dispatcher.UIThread.RunJobs();
@@ -397,11 +442,49 @@ public sealed class DictionaryInputTests
             var translation = view.GetVisualDescendants().OfType<SelectableTextBlock>().Single(b => b.Text == "It rained last night.");
             translation.SelectionStart = 3;
             translation.SelectionEnd = 9;
-            translation.ContextMenu!.Items.OfType<MenuItem>().Single(m => Equals(m.Header, "查询选中文本"))
-                .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            window.UpdateLayout();
+            var at = translation.TranslatePoint(translation.TextLayout.HitTestTextRange(5, 1).First().Center, window)!.Value;
+            window.MouseDown(at, MouseButton.Right);
+            window.MouseUp(at, MouseButton.Right);
             var child = Assert.Single(dictionary.Requests);
             Assert.Equal(("rained", "It rained last night.", "ja"), (child.Query, child.Context, child.Language));
             child.Complete("雨が降った");
+        });
+    }
+
+    [Fact]
+    public async Task RightClickQueriesTheSelectionInAnOrdinarySenseDefinition()
+    {
+        await RunInStudio((window, view, dictionary, _) =>
+        {
+            const string definition = "条件相对简单的舱位等级";
+            view.DisplayResult(new DictionaryEntryResult
+            {
+                SourceText = "economy class", PrimaryTranslation = "经济舱",
+                DetectedSourceLanguage = "en", Senses = [new("n.", definition)]
+            }, TranslationTriggerSource.ManualInput, "");
+            window.UpdateLayout();
+            var sense = view.GetVisualDescendants().OfType<SelectableTextBlock>().Single(b => b.Text == definition);
+            sense.BringIntoView();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Point At(int i) => sense.TranslatePoint(sense.TextLayout.HitTestTextRange(i, 1).First().Center, window)!.Value;
+            var begin = At(2);
+            var end = At(6);
+            Assert.Same(sense, window.InputHitTest(begin));
+            window.MouseDown(begin, MouseButton.Left);
+            window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+            window.MouseUp(end, MouseButton.Left);
+            var selected = sense.SelectedText;
+            Assert.Contains("简单", selected);
+            var point = At(4);
+            window.MouseDown(point, MouseButton.Right);
+            window.MouseUp(point, MouseButton.Right);
+            var child = Assert.Single(dictionary.Requests);
+            Assert.Equal((selected, definition), (child.Query, child.Context));
+            Assert.False(sense.ContextFlyout?.IsOpen == true);
+            child.Complete("simple");
         });
     }
 
@@ -512,6 +595,8 @@ public sealed class DictionaryInputTests
             var translation = string.Join("\n", Enumerable.Repeat("长段落中的一行译文。", 80));
             request.Preview(translation);
             Dispatcher.UIThread.RunJobs();
+            var translations = view.GetVisualDescendants().OfType<DictionaryTranslations>().Single();
+            for (var frame = 0; frame < 60; frame++) translations.AdvanceFrame(TimeSpan.FromMilliseconds(16));
             window.UpdateLayout();
             Assert.True(scroll.Extent.Height > scroll.Viewport.Height);
             Assert.Equal(0, scroll.Offset.Y);
@@ -521,6 +606,13 @@ public sealed class DictionaryInputTests
             window.UpdateLayout();
             request.Preview(translation + "\n最后一行。");
             Dispatcher.UIThread.RunJobs();
+            for (var frame = 0; frame < 16; frame++)
+            {
+                translations.AdvanceFrame(TimeSpan.FromMilliseconds(16));
+                window.UpdateLayout();
+                Assert.Equal(120, scroll.Offset.Y);
+                Assert.Equal(sendPosition, send.TranslatePoint(default, window));
+            }
             window.UpdateLayout();
             Assert.Equal(120, scroll.Offset.Y);
             request.Complete(translation);
@@ -552,10 +644,14 @@ public sealed class DictionaryInputTests
             Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "词性与释义");
             Assert.DoesNotContain(view.GetVisualDescendants().OfType<Button>(), b => AutomationProperties.GetName(b) == "加入生词表");
 
-            var firstDefinition = view.GetVisualDescendants().OfType<SelectableTextBlock>().Single(b => b.Text == "银行");
+            var senses = view.GetVisualDescendants().OfType<DictionarySection>().Single(s => s.Title == "词性与释义");
+            var firstDefinition = senses.GetVisualDescendants().OfType<SelectableTextBlock>().Single(b => b.Text == "银行");
             var pair = new CollocationItem("bank on", "指望", Example: new("We bank on", ""));
             first.Fields(word with { Collocations = [pair] });
             Dispatcher.UIThread.RunJobs();
+            Assert.DoesNotContain("We bank on", Messages(view));
+            view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == "展开「bank on」的例句")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Contains("We bank on", Messages(view));
             first.Fields(word with
             {
@@ -565,7 +661,7 @@ public sealed class DictionaryInputTests
             Dispatcher.UIThread.RunJobs();
             Assert.Contains("我们指望", Messages(view));
             Assert.DoesNotContain("We bank on", Messages(view));
-            Assert.Same(firstDefinition, view.GetVisualDescendants().OfType<SelectableTextBlock>().Single(b => b.Text == "银行"));
+            Assert.Same(firstDefinition, senses.GetVisualDescendants().OfType<SelectableTextBlock>().Single(b => b.Text == "银行"));
 
             var input = view.GetVisualDescendants().OfType<TextBox>().Single(b => b.AcceptsReturn);
             input.Focus();
@@ -605,6 +701,10 @@ public sealed class DictionaryInputTests
             };
             view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
             window.UpdateLayout();
+            Assert.DoesNotContain("他擅长在压力下解决问题。", Messages(view));
+            view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == "展开「be good at」的例句")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            window.UpdateLayout();
             var source = view.GetVisualDescendants().OfType<DictionaryReadingText>()
                 .Single(t => t.Inlines?.Text == entry.Collocations[0].Example!.SourceSentence);
             var example = source.GetVisualAncestors().OfType<Grid>().First();
@@ -638,8 +738,8 @@ public sealed class DictionaryInputTests
             input.Text = "下一个词";
             button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Equal(EntryBlock.Senses, dictionary.ReviewedBlock);
-            Assert.False(input.IsEffectivelyEnabled);
-            Assert.False(flow.IsVisible);
+            Assert.True(input.IsEffectivelyEnabled);
+            Assert.True(flow.IsVisible);
             Assert.All(sections, s => Assert.False(((Button)s.ActionSlot.Content!).IsEnabled));
             dictionary.ReviewPreview!(entry with { Senses = [new("n.", "预览中的释义")], LiteralTranslation = "其他栏目的草稿" });
             Dispatcher.UIThread.RunJobs();
@@ -653,6 +753,7 @@ public sealed class DictionaryInputTests
             Assert.DoesNotContain("预览中的释义", Messages(view));
             Assert.True(input.IsEffectivelyEnabled);
             Assert.Equal("下一个词", input.Text);
+            Assert.False(flow.IsVisible);
             Assert.True(button.IsEnabled);
             Assert.Contains(button.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == "无需调整");
             Assert.Same(button, target.ActionSlot.Content);
@@ -660,9 +761,110 @@ public sealed class DictionaryInputTests
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task LiteralReviewStreamsLocallyAndDropsLateFramesAfterSuccessOrFailure(bool fail)
+    [InlineData(DictionaryStageState.Completed, "核对整条")]
+    [InlineData(DictionaryStageState.Failed, "补全并核对")]
+    public async Task WholeEntryReviewShowsActivityAndCanBeStopped(DictionaryStageState extension, string label)
+    {
+        await RunInStudio((window, view, dictionary, _) =>
+        {
+            var entry = new DictionaryEntryResult
+            {
+                SourceText = "economy", PrimaryTranslation = "经济",
+                Processing = new() { Intent = DictionaryLookupIntent.Learning, Extension = extension, Review = DictionaryStageState.Failed }
+            };
+            view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
+            window.UpdateLayout();
+            Button ButtonNamed(string name) => view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == name);
+            ButtonNamed(label).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var input = view.GetVisualDescendants().OfType<SuggestingTextBox>().Single();
+            var flow = view.GetVisualDescendants().OfType<FlowingBorderEffect>().Single();
+            Assert.True(input.IsEffectivelyEnabled);
+            Assert.True(flow.IsVisible);
+            Assert.Contains("核对", input.PlaceholderText);
+            ButtonNamed("停止复核").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.True(dictionary.SupplementToken.IsCancellationRequested);
+            Assert.False(flow.IsVisible);
+            dictionary.Supplement.SetResult(entry with { PrimaryTranslation = "迟到的修改" });
+            Dispatcher.UIThread.RunJobs();
+            Assert.DoesNotContain("迟到的修改", Messages(view));
+        });
+    }
+
+    [Fact]
+    public async Task SendingADraftDuringBlockReviewSupersedesTheReview()
+    {
+        await RunInStudio((window, view, dictionary, _) =>
+        {
+            var entry = new DictionaryEntryResult { SourceText = "economy", PrimaryTranslation = "经济", Senses = [new("n.", "经济")] };
+            view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
+            window.UpdateLayout();
+            var review = view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == "智能复核 · 词性与释义");
+            review.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var input = view.GetVisualDescendants().OfType<SuggestingTextBox>().Single();
+            input.Focus();
+            input.Text = "cabin";
+            window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            window.KeyReleaseQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            Assert.True(dictionary.SupplementToken.IsCancellationRequested);
+            var next = Assert.Single(dictionary.Requests);
+            Assert.Equal("cabin", next.Query);
+            dictionary.ReviewPreview!(entry with { Senses = [new("n.", "迟到的预览")] });
+            dictionary.Supplement.SetResult(entry);
+            Dispatcher.UIThread.RunJobs();
+            var flow = view.GetVisualDescendants().OfType<FlowingBorderEffect>().Single();
+            Assert.True(flow.IsVisible);
+            next.Complete("客舱");
+            Dispatcher.UIThread.RunJobs();
+            Assert.Contains("客舱", Messages(view));
+            Assert.False(flow.IsVisible);
+        });
+    }
+
+    [Theory]
+    [InlineData(808, true)]
+    [InlineData(620, false)]
+    public async Task PairedTranslationsKeepEqualTypeAndSeparatePageTools(double width, bool sideBySide)
+    {
+        await RunInStudio((window, view, _, _) =>
+        {
+            window.Width = width;
+            var entry = new DictionaryEntryResult
+            {
+                SourceText = "a series of pleasant thoughts about something you would prefer to be doing",
+                ItemType = VocabularyItemType.Phrase, PrimaryTranslation = "对自己更愿意去做的事所产生的一连串愉快想象",
+                LiteralTranslation = "关于某件你更愿意做的事情的一系列愉快想法"
+            };
+            view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
+            window.UpdateLayout();
+            var group = view.GetVisualDescendants().OfType<DictionaryTranslations>().Single();
+            var natural = group.GetVisualDescendants().OfType<DictionaryReadingText>().Single();
+            var literal = group.GetVisualDescendants().OfType<SelectableTextBlock>().Single(t => t.Text == entry.LiteralTranslation);
+            Assert.False(natural.HasLinkedTerms);
+            Assert.Equal((natural.FontSize, natural.FontWeight, natural.Foreground, natural.LineHeight),
+                (literal.FontSize, literal.FontWeight, literal.Foreground, literal.LineHeight));
+            var first = natural.TranslatePoint(default, window)!.Value;
+            var second = literal.TranslatePoint(default, window)!.Value;
+            if (sideBySide)
+            {
+                Assert.Equal(first.Y, second.Y, 2);
+                Assert.True(first.X + natural.Bounds.Width <= second.X);
+            }
+            else
+            {
+                Assert.Equal(first.X, second.X, 2);
+                Assert.True(first.Y + natural.Bounds.Height < second.Y);
+            }
+            var hint = view.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "选中正文后右键查词");
+            Assert.True(hint.TranslatePoint(default, group)!.Value.Y > group.Bounds.Height);
+        });
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task TranslationReviewStreamsOnlyItsReadingAndDropsLateFrames(bool natural, bool fail)
     {
         await RunInStudio((window, view, dictionary, _) =>
         {
@@ -671,20 +873,23 @@ public sealed class DictionaryInputTests
             view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
             window.UpdateLayout();
             var button = view.GetVisualDescendants().OfType<Button>()
-                .Single(b => AutomationProperties.GetName(b) == "智能复核 · 直译对照");
+                .Single(b => AutomationProperties.GetName(b) == (natural ? "智能复核 · 自然译文" : "智能复核 · 直译对照"));
             button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            var draft = entry with { LiteralTranslation = "踢那个" };
+            Assert.Equal(natural ? EntryBlock.PrimaryTranslation : EntryBlock.LiteralTranslation, dictionary.ReviewedBlock);
+            var draft = entry with { PrimaryTranslation = "离开人", LiteralTranslation = "踢那个" };
             dictionary.ReviewPreview!(draft);
             Dispatcher.UIThread.RunJobs();
-            Assert.Contains("踢那个", Messages(view));
+            Assert.Contains(natural ? "离开人" : "踢那个", Messages(view));
+            Assert.DoesNotContain(natural ? "踢那个" : "离开人", Messages(view));
             if (fail) dictionary.Supplement.SetException(new AiException("连接中断"));
-            else dictionary.Supplement.SetResult(entry with { LiteralTranslation = "踢那个桶" });
+            else dictionary.Supplement.SetResult(natural ? entry with { PrimaryTranslation = "离开人世" } : entry with { LiteralTranslation = "踢那个桶" });
             Dispatcher.UIThread.RunJobs();
             dictionary.ReviewPreview!(draft);
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
-            Assert.Contains(fail ? "踢桶" : "踢那个桶", Messages(view));
-            Assert.DoesNotContain("踢那个", Messages(view));
+            Assert.Contains(natural ? fail ? "去世" : "离开人世" : fail ? "踢桶" : "踢那个桶", Messages(view));
+            Assert.Contains(natural ? entry.LiteralTranslation : entry.PrimaryTranslation, Messages(view));
+            Assert.DoesNotContain(natural ? "离开人" : "踢那个", Messages(view));
             Assert.True(view.GetVisualDescendants().OfType<SuggestingTextBox>().Single().IsEffectivelyEnabled);
             Assert.Equal(fail, view.GetVisualDescendants().OfType<DictionaryTranslations>().Single()
                 .GetVisualDescendants().OfType<TextBlock>().Any(t => t.IsEffectivelyVisible && t.Text?.Contains("连接中断") == true));
@@ -740,6 +945,8 @@ public sealed class DictionaryInputTests
                 Collocations = [original.Collocations[0] with { Example = new("We adapt to change.", "我们适应变化。", "adapt to") }]
             });
             Dispatcher.UIThread.RunJobs();
+            Assert.DoesNotContain("We adapt to change.", Messages(view));
+            ButtonNamed("展开「adapt to」的例句").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Assert.Contains("We adapt to change.", Messages(view));
             Assert.DoesNotContain(view.GetVisualDescendants().OfType<Button>(),
                 b => AutomationProperties.GetName(b)?.StartsWith("补全例句") == true);
@@ -805,6 +1012,10 @@ public sealed class DictionaryInputTests
             var card = vocabulary.AddOrUpdateFromDictionary(result);
             view.DisplayResult(card.ToDictionaryResult(), TranslationTriggerSource.VocabularyReview, "");
             window.UpdateLayout();
+            Assert.DoesNotContain("visible illumination", Messages(view));
+            view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == "展开「光线」的详解")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            window.UpdateLayout();
             var section = view.GetVisualDescendants().OfType<DictionarySection>().Single(s => s.Title == "词性与释义");
             var text = section.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text ?? t.Inlines?.Text).ToList();
             Assert.Single(text, t => t == "名词");
@@ -848,8 +1059,10 @@ public sealed class DictionaryInputTests
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
             Assert.Contains("河岸", Messages(view));
+            Assert.DoesNotContain("a financial institution", Messages(view));
             Assert.DoesNotContain("the side of a river", Messages(view));
             Click("展开「河岸」的详解");
+            Click("展开「银行」的详解");
             Click("收起「银行」的详解");
             Click("展开「bank account」的例句");
             request.Completion.SetResult(entry);
@@ -926,6 +1139,10 @@ public sealed class DictionaryInputTests
             var lookup = Assert.Single(dictionary.Requests);
             lookup.Fields(entry);
             Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.DoesNotContain("two coffees", Messages(view));
+            view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == "展开「咖啡」的详解")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             window.UpdateLayout();
             var section = view.GetVisualDescendants().OfType<DictionarySection>().Single(s => s.Title == "词性与释义");
             TextBlock Find(string value) => section.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == value);
@@ -1210,6 +1427,8 @@ public sealed class DictionaryInputTests
 
     private sealed class PendingLookup : IAiDictionaryService
     {
+        public Task<DictionaryEntryResult> ReviewEntryAsync(DictionaryEntryResult entry, CancellationToken token,
+            Action<DictionaryEntryResult>? onPreview = null) => CompleteExamplesAsync(entry, entry.LookupContext, token);
         public Func<string, CancellationToken, Task<string?>> Suggest { get; set; } = (_, _) => Task.FromResult<string?>(null);
         public Task<string?> FindSuggestionAsync(string prefix, string targetMode, CancellationToken cancellationToken) => Suggest(prefix, cancellationToken);
         public bool CacheOnly { get; private set; }
@@ -1236,7 +1455,7 @@ public sealed class DictionaryInputTests
         public Task<DictionaryEntryResult> LookupOrTranslateAsync(string sourceText, string targetLanguageId,
             string? contextSentence, Action<string>? onStreamingPreview, CancellationToken cancellationToken,
             Action<DictionaryEntryResult>? onEntryPreview = null, bool forceRefresh = false, bool cacheOnly = false,
-            Action<DictionaryEntryResult>? onUsableEntry = null)
+            Action<DictionaryEntryResult>? onUsableEntry = null, DictionaryLookupIntent intent = DictionaryLookupIntent.Learning)
         {
             CacheOnly = cacheOnly;
             var request = new Request(sourceText, onStreamingPreview!, cancellationToken, onEntryPreview!, targetLanguageId, forceRefresh, contextSentence)

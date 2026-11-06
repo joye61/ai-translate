@@ -13,7 +13,7 @@ using Avalonia.VisualTree;
 
 namespace AiTranslate.Desktop.Controls;
 
-internal enum ComposerActivity { Ready, Translating, ReviewingBlock }
+internal enum ComposerActivity { Ready, Translating, Reviewing }
 
 internal sealed class DictionaryComposer : Grid
 {
@@ -29,10 +29,10 @@ internal sealed class DictionaryComposer : Grid
     };
     private readonly ComboBox _language;
     private readonly Button _send;
-    private readonly TextBlock _hint = TextStyles.Create(null, TextRole.Meta, wrap: false);
+    private readonly TextBlock _hint = TextStyles.Create("Tab 补全  ·  Enter 发送  ·  Shift + Enter 换行", TextRole.Meta, wrap: false);
     private readonly MdiIcon _sendIcon = new("arrow-up", 20, AppTheme.CardBg);
     private readonly FlowingBorderEffect _flow = new();
-    private bool _generating;
+    private ComposerActivity _activity;
 
     public string? LanguageId => (_language.SelectedItem as TranslationLanguage)?.Id;
     public void FocusInput() => _input.Focus();
@@ -72,7 +72,7 @@ internal sealed class DictionaryComposer : Grid
         };
         _send.Click += (_, _) =>
         {
-            if (_generating && !DictionaryQuery.HasContent(_input.Text)) stop();
+            if (_activity != ComposerActivity.Ready && !DictionaryQuery.HasContent(_input.Text)) stop();
             else Send();
             _input.Focus();
         };
@@ -125,25 +125,23 @@ internal sealed class DictionaryComposer : Grid
         SetActivity(ComposerActivity.Ready);
     }
 
-    public void SetActivity(ComposerActivity activity)
+    public void SetActivity(ComposerActivity activity, string? progress = null)
     {
-        _generating = activity == ComposerActivity.Translating;
-        _flow.IsVisible = _generating;
-        IsEnabled = activity != ComposerActivity.ReviewingBlock;
-        _input.PlaceholderText = IsEnabled ? InputPrompt : "栏目复核中…";
-        _hint.Text = IsEnabled ? "Tab 补全  ·  Enter 发送  ·  Shift + Enter 换行" : "复核完成后可继续输入";
+        _activity = activity;
+        _flow.IsVisible = activity != ComposerActivity.Ready;
+        _input.PlaceholderText = progress ?? InputPrompt;
         UpdateAction();
     }
 
     private void UpdateAction()
     {
         var hasText = DictionaryQuery.HasContent(_input.Text);
-        var stop = _generating && !hasText;
+        var stop = _activity != ComposerActivity.Ready && !hasText;
         _sendIcon.IconName = stop ? "stop" : "arrow-up";
-        var label = stop ? "停止生成" : "发送翻译";
+        var label = !stop ? "发送翻译" : _activity == ComposerActivity.Reviewing ? "停止复核" : "停止生成";
         AutomationProperties.SetName(_send, label);
         ToolTip.SetTip(_send, stop ? label : "发送翻译 (Enter) · Shift+Enter 换行");
-        _send.IsEnabled = _generating || hasText;
+        _send.IsEnabled = stop || hasText;
         _sendIcon.Foreground = _send.IsEnabled ? AppTheme.CardBg : AppTheme.TextMuted;
     }
 

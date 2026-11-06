@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using AiTranslate.Core;
 using Microsoft.Data.Sqlite;
@@ -11,6 +13,12 @@ public sealed class DictionaryEntryCache(string? databasePath = null) : IDiction
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AiTranslate", "dictionary-cache.sqlite3"));
     private readonly object _schemaLock = new();
     private volatile bool _initialized;
+
+    public void UpgradeExistingDatabase()
+    {
+        if (!File.Exists(_path)) return;
+        using var db = Open();
+    }
 
     public IEnumerable<(string Source, string Key)> FindCompletions(string prefix, string? targetLanguage, string readerLanguage,
         CancellationToken cancellationToken)
@@ -44,13 +52,18 @@ public sealed class DictionaryEntryCache(string? databasePath = null) : IDiction
             ? entry with { CacheStamp = new(key, revision) } : null;
     }
 
-    public string[]? ReadTranslations(string key) => Read<string[]>("verified_translations", key).Value;
+    public string[]? ReadTranslations(string key) => Read<string[]>("verified_translations", VerifiedKey(key), key).Value;
 
-    private (T? Value, long Revision) Read<T>(string table, string key) where T : class
+    private static string VerifiedKey(string key) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
+
+    private (T? Value, long Revision) Read<T>(string table, string key, string? legacyKey = null) where T : class
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = $"SELECT entry, request_ticks FROM {table} WHERE cache_key = $key";
+        // A still-running older version may have written an original OCR key since the migration.
+        command.CommandText = $"SELECT entry, request_ticks FROM {table} WHERE " + (legacyKey is null ? "cache_key = $key"
+            : "cache_key IN ($key,$legacy) ORDER BY request_ticks DESC LIMIT 1");
+        if (legacyKey is not null) command.Parameters.AddWithValue("$legacy", legacyKey);
         command.Parameters.AddWithValue("$key", key);
         using var row = command.ExecuteReader();
         if (!row.Read()) return default;
@@ -65,28 +78,42 @@ public sealed class DictionaryEntryCache(string? databasePath = null) : IDiction
     }
 
     public bool Write(string key, DictionaryEntryResult result, long requestTicks) =>
-        Upsert("dictionary", key, JsonSerializer.Serialize(result), requestTicks);
+        WriteDictionary(key, result, requestTicks, insertOnly: false);
 
     public bool TryAdd(string key, DictionaryEntryResult result, long requestTicks) =>
-        Upsert("dictionary", key, JsonSerializer.Serialize(result), requestTicks, insertOnly: true);
+        WriteDictionary(key, result, requestTicks, insertOnly: true);
 
-    public void WriteTranslations(string key, string[] translations, long requestTicks) =>
-        Upsert("verified_translations", key, JsonSerializer.Serialize(translations), requestTicks);
-
-    private bool Upsert(string table, string key, string json, long requestTicks, bool insertOnly = false)
+    private bool WriteDictionary(string key, DictionaryEntryResult result, long requestTicks, bool insertOnly)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = $"""
-            INSERT INTO {table}(cache_key, entry, request_ticks) VALUES($key, $entry, $ticks)
-            ON CONFLICT(cache_key) DO UPDATE SET entry = excluded.entry, request_ticks = excluded.request_ticks
-            WHERE NOT $insertOnly AND excluded.request_ticks >= {table}.request_ticks
+        command.CommandText = """
+            INSERT INTO dictionary(cache_key, entry, request_ticks, standalone) VALUES($key, $entry, $ticks, $standalone)
+            ON CONFLICT(cache_key) DO UPDATE SET entry=excluded.entry, request_ticks=excluded.request_ticks, standalone=excluded.standalone
+            WHERE NOT $insertOnly AND excluded.request_ticks >= dictionary.request_ticks
             """;
         command.Parameters.AddWithValue("$key", key);
-        command.Parameters.AddWithValue("$entry", json);
+        command.Parameters.AddWithValue("$entry", JsonSerializer.Serialize(result));
+        command.Parameters.AddWithValue("$standalone", string.IsNullOrWhiteSpace(result.LookupContext));
         command.Parameters.AddWithValue("$insertOnly", insertOnly);
         command.Parameters.AddWithValue("$ticks", requestTicks);
         return command.ExecuteNonQuery() == 1;
+    }
+
+    public void WriteTranslations(string key, string[] translations, long requestTicks)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = """
+            INSERT INTO verified_translations(cache_key,entry,request_ticks,source_request) VALUES($key,$entry,$ticks,$source)
+            ON CONFLICT(cache_key) DO UPDATE SET entry=excluded.entry, request_ticks=excluded.request_ticks
+            WHERE excluded.request_ticks >= verified_translations.request_ticks
+            """;
+        command.Parameters.AddWithValue("$key", VerifiedKey(key));
+        command.Parameters.AddWithValue("$source", key);
+        command.Parameters.AddWithValue("$entry", JsonSerializer.Serialize(translations));
+        command.Parameters.AddWithValue("$ticks", requestTicks);
+        command.ExecuteNonQuery();
     }
 
     // A supplement belongs to the exact entry the reader saw. Never overwrite a newer translation.
@@ -116,17 +143,7 @@ public sealed class DictionaryEntryCache(string? databasePath = null) : IDiction
             lock (_schemaLock)
             {
                 if (_initialized) return db;
-                using var schema = db.CreateCommand();
-                schema.CommandText = """
-                CREATE TABLE IF NOT EXISTS dictionary (
-                  cache_key TEXT PRIMARY KEY, entry TEXT NOT NULL, request_ticks INTEGER NOT NULL
-                ) WITHOUT ROWID;
-                CREATE TABLE IF NOT EXISTS verified_translations (
-                  cache_key TEXT PRIMARY KEY, entry TEXT NOT NULL, request_ticks INTEGER NOT NULL
-                ) WITHOUT ROWID;
-                """;
-                schema.ExecuteNonQuery();
-                EnsureSuggestionIndex(db);
+                EnsureSchema(db);
                 _initialized = true;
             }
             return db;
@@ -134,23 +151,50 @@ public sealed class DictionaryEntryCache(string? databasePath = null) : IDiction
         catch { db.Dispose(); throw; }
     }
 
-    private static void EnsureSuggestionIndex(SqliteConnection db)
+    private static void EnsureSchema(SqliteConnection db)
     {
         using var command = db.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='dictionary_suggestions'";
-        if (command.ExecuteScalar() is not null) return;
-
-        // Serialize the backfill with other processes. Triggers also track writes by older app versions.
+        command.CommandText = "PRAGMA user_version";
+        if ((long)command.ExecuteScalar()! == 2) return;
         using var transaction = db.BeginTransaction();
         command.Transaction = transaction;
-        if (command.ExecuteScalar() is null)
+        var version = (long)command.ExecuteScalar()!;
+        if (version == 0)
         {
+            db.CreateFunction<string, string>("verified_key", VerifiedKey, isDeterministic: true);
+            // Preserve dictionary payloads and plain-text history. Legacy OCR requests are identifiable by their mode.
+            command.CommandText = """
+                CREATE TABLE IF NOT EXISTS dictionary (
+                    cache_key TEXT PRIMARY KEY, entry TEXT NOT NULL, request_ticks INTEGER NOT NULL
+                ) WITHOUT ROWID;
+                ALTER TABLE dictionary ADD COLUMN standalone INTEGER NOT NULL DEFAULT 1;
+                CREATE TABLE IF NOT EXISTS verified_translations (
+                    cache_key TEXT PRIMARY KEY, entry TEXT NOT NULL, request_ticks INTEGER NOT NULL
+                ) WITHOUT ROWID;
+                ALTER TABLE verified_translations RENAME TO previous_verified;
+                CREATE TABLE verified_translations (
+                    cache_key TEXT NOT NULL PRIMARY KEY, entry TEXT NOT NULL, request_ticks INTEGER NOT NULL, source_request TEXT
+                );
+                INSERT INTO verified_translations(cache_key,entry,request_ticks,source_request)
+                    SELECT verified_key(cache_key),entry,request_ticks,cache_key FROM previous_verified
+                    WHERE json_extract(CASE WHEN json_valid(cache_key) THEN cache_key END,'$.mode') IS NOT 'regions';
+                DROP TABLE previous_verified;
+                DROP TRIGGER IF EXISTS dictionary_suggestions_insert;
+                DROP TRIGGER IF EXISTS dictionary_suggestions_update;
+                DROP TRIGGER IF EXISTS dictionary_suggestions_delete;
+                DROP TABLE IF EXISTS dictionary_suggestions;
+                """;
+            command.ExecuteNonQuery();
             static string Project(string row) => $"""
                 INSERT INTO dictionary_suggestions(cache_key, source, target, reader, request_ticks)
                 SELECT {row}.cache_key, json_extract({row}.entry, '$.SourceText'), json_extract({row}.entry, '$.TargetLanguage'),
                        json_extract({row}.entry, '$.ReaderLanguage'), {row}.request_ticks
                 {(row == "NEW" ? "" : "FROM dictionary")}
                 WHERE CASE WHEN json_valid({row}.entry) THEN length(trim(json_extract({row}.entry, '$.PrimaryTranslation'))) > 0
+                      AND {row}.standalone AND COALESCE(json_extract({row}.entry,'$.ItemType'),0) NOT IN ({(int)VocabularyItemType.Sentence},{(int)VocabularyItemType.Paragraph})
+                      AND length(json_extract({row}.entry,'$.SourceText')) BETWEEN 1 AND 100
+                      AND instr(json_extract({row}.entry,'$.SourceText'),char(10))=0
+                      AND instr(json_extract({row}.entry,'$.SourceText'),char(13))=0
                       AND json_type({row}.entry, '$.SourceText') = 'text' END;
                 """;
             command.CommandText = $"""
@@ -173,6 +217,19 @@ public sealed class DictionaryEntryCache(string? databasePath = null) : IDiction
                 """;
             command.ExecuteNonQuery();
         }
+        else if (version == 1)
+        {
+            // v1 uses a digest and stores the original request separately. Older writers used the raw request as the key.
+            command.CommandText = """
+                DELETE FROM verified_translations
+                WHERE json_extract(CASE WHEN json_valid(source_request) THEN source_request
+                                        WHEN json_valid(cache_key) THEN cache_key END,'$.mode') = 'regions';
+                """;
+            command.ExecuteNonQuery();
+        }
+        else if (version != 2) throw new InvalidDataException($"无法识别翻译缓存版本 {version}。");
+        command.CommandText = "PRAGMA user_version=2";
+        command.ExecuteNonQuery();
         transaction.Commit();
     }
 }

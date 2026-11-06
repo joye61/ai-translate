@@ -150,8 +150,7 @@ public sealed class EngineSettingsView : UserControl
                 StudioUi.CreateSectionHeader("sparkles", "翻译引擎", null, AppTheme.Hues.Coral),
                 Field("接口地址 Base URL", _baseUrlBox),
                 Field("模型 Model ID", _modelIdBox),
-                Field("API Key", _apiKeyBox),
-                saveBtn
+                Field("API Key", _apiKeyBox)
             }
         });
 
@@ -174,10 +173,8 @@ public sealed class EngineSettingsView : UserControl
             }
         });
 
-        var shortcuts = new Grid
+        var shortcuts = new AdaptiveColumns(2, 235)
         {
-            ColumnDefinitions = new ColumnDefinitions("*,*"),
-            RowDefinitions = new RowDefinitions("Auto,Auto"),
             ColumnSpacing = AppTheme.Space.XXL,
             RowSpacing = AppTheme.Space.XS
         };
@@ -188,13 +185,7 @@ public sealed class EngineSettingsView : UserControl
             ("crop-free", "截图翻译", current.ScreenshotTranslateHotkey.ToString()),
             ("clipboard-text-outline", "剪贴板翻译", current.ClipboardTranslateHotkey.ToString())
         };
-        for (var i = 0; i < hotkeys.Length; i++)
-        {
-            var row = ShortcutRow(hotkeys[i].Item1, hotkeys[i].Item2, hotkeys[i].Item3);
-            Grid.SetRow(row, i / 2);
-            Grid.SetColumn(row, i % 2);
-            shortcuts.Children.Add(row);
-        }
+        foreach (var (icon, label, shortcut) in hotkeys) shortcuts.Children.Add(ShortcutRow(icon, label, shortcut));
         var hotkeysCard = StudioUi.CreateBentoCard(new StackPanel
         {
             Spacing = AppTheme.Space.M,
@@ -205,20 +196,19 @@ public sealed class EngineSettingsView : UserControl
             }
         });
 
-        Grid.SetColumn(speechCard, 1);
-        Grid.SetRow(hotkeysCard, 1);
-        Grid.SetColumnSpan(hotkeysCard, 2);
-        var layoutGrid = new Grid
+        var editors = new AdaptiveColumns(2, 300)
         {
-            ColumnDefinitions = new ColumnDefinitions("*,*"),
-            RowDefinitions = new RowDefinitions("Auto,Auto"),
-            ColumnSpacing = AppTheme.Space.L,
-            RowSpacing = AppTheme.Space.L,
+            ColumnSpacing = AppTheme.Space.L, RowSpacing = AppTheme.Space.L, Children = { aiConfigCard, speechCard }
+        };
+        saveBtn.HorizontalAlignment = HorizontalAlignment.Right;
+        var sections = new StackPanel
+        {
+            Spacing = AppTheme.Space.M,
             Margin = new Thickness(AppTheme.Space.XXL, 0, AppTheme.Space.XXL, AppTheme.Space.XL),
-            Children = { aiConfigCard, speechCard, hotkeysCard }
+            Children = { editors, saveBtn, hotkeysCard }
         };
 
-        Content = new ScrollViewer { Content = layoutGrid };
+        Content = new ScrollViewer { Content = sections };
     }
 
     private static StackPanel Field(string label, Control editor) => new()

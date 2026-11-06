@@ -1,3 +1,4 @@
+using AiTranslate.Core;
 using Avalonia.Controls;
 using Avalonia.Media;
 
@@ -54,6 +55,9 @@ public sealed record TextStyle(double Size, FontWeight Weight, IBrush Foreground
 
 public static class TextStyles
 {
+    internal static TextRole HeadwordRole(string text) =>
+        DictionaryQuery.SuggestType(text).IsPassage() ? TextRole.PageTitle : TextRole.Display;
+
     public static TextStyle Get(TextRole role) => role switch
     {
         TextRole.Display => new(AppTheme.Type.Display, FontWeight.Bold, AppTheme.TextPrimary, 38),

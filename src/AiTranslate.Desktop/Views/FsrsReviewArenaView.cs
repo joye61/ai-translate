@@ -159,8 +159,8 @@ public sealed class FsrsReviewArenaView : UserControl
         _progressBar.Value = _currentIndex;
 
         var cardStack = new StackPanel { Spacing = AppTheme.Space.L, Margin = new Thickness(AppTheme.Space.XS) };
-        cardStack.Children.Add(TextStyles.Selectable(entry.Headword, TextRole.Display));
-        cardStack.Children.Add(TextStyles.Selectable(entry.Translation, TextRole.Translation));
+        cardStack.Children.Add(TextStyles.Selectable(entry.Headword, TextStyles.HeadwordRole(entry.Headword)));
+        cardStack.Children.Add(TextStyles.Selectable(entry.Translation, entry.ItemType.IsPassage() ? TextRole.PassageTranslation : TextRole.Translation));
         var accent = PhonicsAudioBar.SourceAccent(entry.SourceLanguage);
         if (accent == SpeechAccent.AmericanEnglish && !entry.ItemType.IsPassage())
             cardStack.Children.Add(PhonicsAudioBar.CreateWordPhonicsStrip(_speechService, _settingsStore, entry.Headword,
@@ -171,27 +171,34 @@ public sealed class FsrsReviewArenaView : UserControl
         if (!string.IsNullOrWhiteSpace(entry.ContextSentence))
         {
             var context = new StackPanel { Spacing = AppTheme.Space.XXS };
+            context.Children.Add(TextStyles.Create("收录时的语境", TextRole.Label));
             context.Children.Add(TextStyles.Selectable(entry.ContextSentence, TextRole.ExampleSource));
             if (!string.IsNullOrWhiteSpace(entry.ContextTranslation))
                 context.Children.Add(TextStyles.Selectable(entry.ContextTranslation, TextRole.ExampleTarget));
-            cardStack.Children.Add(StudioUi.CreateInfoTile("收录时的语境", context, "format-quote-close"));
+            cardStack.Children.Add(RichBlocks.Quote(context));
         }
-        if (DictionaryInsightBlocks.WordFormation(entry.Morphemes, entry.EtymologyAndRoot, entry.Headword) is { } formation)
+        if (DictionaryInsightBlocks.Combine(DictionaryInsightBlocks.WordFormation(entry.Morphemes, entry.EtymologyAndRoot, entry.Headword),
+            DictionaryInsightBlocks.Explanations(entry.EtymologyNotes)) is { } formation)
             cardStack.Children.Add(StudioUi.CreateInfoTile("构词与词源", formation, "code-braces", AppTheme.Insight));
-        if (DictionaryInsightBlocks.Note(entry.MemoryMnemonic, "lightbulb-on-outline", RichBlocks.CalloutTone.Attention) is { } mnemonic)
+        if (DictionaryInsightBlocks.Combine(DictionaryInsightBlocks.Note(entry.MemoryMnemonic, "lightbulb-on-outline", RichBlocks.CalloutTone.Attention),
+            DictionaryInsightBlocks.Mnemonics(entry.Mnemonics)) is { } mnemonic)
             cardStack.Children.Add(mnemonic);
 
         var intervals = SpacedRepetitionScheduler.PreviewIntervals(entry, DateTimeOffset.UtcNow);
-        var gradeGrid = new Grid
+        var gradeGrid = new AdaptiveColumns(4, 96)
         {
-            ColumnDefinitions = new ColumnDefinitions("*,*,*,*"),
-            ColumnSpacing = AppTheme.Space.S,
-            Margin = new Thickness(0, AppTheme.Space.XS, 0, 0)
+            ColumnSpacing = AppTheme.Space.S, RowSpacing = AppTheme.Space.S
         };
 
         void Submit(ReviewRating r)
         {
-            var updated = _vocabularyService.SubmitReview(entry.Id, r);
+            VocabularyEntry updated;
+            try { updated = _vocabularyService.SubmitReview(entry.Id, r); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                _setStatus($"复习记录保存失败。{ex.Message}");
+                return;
+            }
             _setStatus($"已记录「{updated.Headword}」反馈 ({UiLabels.Rating(r)}) · 下次复习间隔已更新");
             _currentIndex++;
             RenderCard();
@@ -209,10 +216,10 @@ public sealed class FsrsReviewArenaView : UserControl
         {
             var (rating, interval, hue) = grades[i];
             var button = CreateGradeButton(UiLabels.Rating(rating), SpacedRepetitionScheduler.FormatInterval(interval), hue, () => Submit(rating));
-            Grid.SetColumn(button, i);
             gradeGrid.Children.Add(button);
         }
-        cardStack.Children.Add(gradeGrid);
+        cardStack.Children.Add(new Border { BorderBrush = AppTheme.BorderSubtle, BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(0, AppTheme.Space.M, 0, 0), Child = gradeGrid });
 
         _cardStage.Children.Add(StudioUi.CreateHeroCard(cardStack));
     }

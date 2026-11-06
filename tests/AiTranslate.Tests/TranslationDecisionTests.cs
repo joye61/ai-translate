@@ -22,6 +22,7 @@ public sealed class TranslationDecisionTests
     {
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
+            if (PipelineReplies.TryEmptyStage(messages, out var stage)) return Task.FromResult(stage);
             const string first = """{"primaryTranslation":"并非全部通过。","itemType":"Sentence","translationDecisions":[{"sourceQuote":"Not all","targetQuote":"并非全部","reason":"说明""";
             const string last = "部分否定。\"}]}";
             onText(first);

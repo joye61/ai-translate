@@ -9,32 +9,30 @@ public sealed partial class VocabularyService
 
     public bool IsCollected(DictionaryEntryResult result, string notebookId)
     {
-        lock (_gate)
-            return _store.Entries.Any(e => e.NotebookId == notebookId &&
-                MatchesDictionary(e, result.SourceText.Trim(), result.TargetLanguage, result.LookupContext));
+        return _database.Read(db => db.ByHead(result.SourceText.Trim()).Any(e => e.NotebookId == notebookId &&
+                MatchesDictionary(e, result.SourceText.Trim(), result.TargetLanguage, result.LookupContext)));
     }
 
     public void RemoveFromNotebook(DictionaryEntryResult result, string notebookId)
     {
-        lock (_gate)
+        var changed = _database.Write(db =>
         {
-            var entries = _store.Entries.Where(e => e.NotebookId != notebookId ||
-                !MatchesDictionary(e, result.SourceText.Trim(), result.TargetLanguage, result.LookupContext)).ToList();
-            if (entries.Count == _store.Entries.Count) return;
-            CommitOrganization(_store.Notebooks, entries);
-        }
-        Changed?.Invoke(this, EventArgs.Empty);
+            var cards = db.ByHead(result.SourceText.Trim()).Where(e => e.NotebookId == notebookId &&
+                MatchesDictionary(e, result.SourceText.Trim(), result.TargetLanguage, result.LookupContext));
+            return cards.Sum(e => db.Execute("DELETE FROM cards WHERE id=$p0", e.Id));
+        });
+        if (changed > 0) Changed?.Invoke(this, EventArgs.Empty);
     }
 
     public void CompleteCollection(VocabularyEntry collected, DictionaryEntryResult result, long revision)
     {
-        lock (_gate)
+        var changed = _database.Write(db =>
         {
-            var index = _store.Entries.FindIndex(e => e.Id == collected.Id);
-            if (index < 0) return; // Collection may have been undone while the lookup was running.
-            var card = _store.Entries[index];
+            if (db.Card(collected.Id) is not { } card) return false;
+            if (result.Processing?.Intent == DictionaryLookupIntent.Quick &&
+                card.DictionaryProcessing?.Intent == DictionaryLookupIntent.Learning) return false;
             if (card.DictionaryRevision > revision ||
-                !MatchesDictionary(card, result.SourceText.Trim(), result.TargetLanguage, result.LookupContext)) return;
+                !MatchesDictionary(card, result.SourceText.Trim(), result.TargetLanguage, result.LookupContext)) return false;
 
             // The normal cache refresh may already have applied this revision. Finish the initial
             // collection defaults as well, preserving any changes made since the user clicked.
@@ -49,42 +47,56 @@ public sealed partial class VocabularyService
                 ContextTranslation = card.ContextTranslation.Length == 0 && collected.ContextTranslation.Length == 0
                     ? result.ContextMeaning ?? example?.TranslatedSentence ?? card.ContextTranslation : card.ContextTranslation
             };
-            if (updated == card) return;
-            var entries = new List<VocabularyEntry>(_store.Entries) { [index] = updated with { UpdatedAt = DateTimeOffset.UtcNow } };
-            CommitOrganization(_store.Notebooks, entries);
-        }
-        Changed?.Invoke(this, EventArgs.Empty);
+            if (updated == card) return false;
+            db.SaveCard(updated with { UpdatedAt = DateTimeOffset.UtcNow });
+            return true;
+        });
+        if (changed) Changed?.Invoke(this, EventArgs.Empty);
     }
 
     public void RefreshCollectedEntries(DictionaryEntryResult result, long revision)
     {
-        lock (_gate)
+        var changed = _database.Write(db =>
         {
-            List<VocabularyEntry>? updated = null;
-            for (var i = 0; i < _store.Entries.Count; i++)
+            var updated = false;
+            foreach (var card in db.ByHead(result.SourceText.Trim()))
             {
-                var card = _store.Entries[i];
+                if (result.Processing?.Intent == DictionaryLookupIntent.Quick &&
+                    card.DictionaryProcessing?.Intent == DictionaryLookupIntent.Learning) continue;
                 // A cache hit can repair an interrupted notebook write. Legacy or manually created
                 // cards without a revision adopt AI content only on a fresh request.
                 if (card.DictionaryRevision >= revision || (result.Origin == DictionaryResultOrigin.Cache &&
                     card.DictionaryRevision == 0 && result.ReviewedBlocks.Count == 0) ||
                     !MatchesDictionary(card, result.SourceText.Trim(), result.TargetLanguage, result.LookupContext)) continue;
-                var reviewed = result.ReviewedBlocks.Count > 0 && result.Origin is DictionaryResultOrigin.Cache or DictionaryResultOrigin.Reviewed;
-                if (reviewed && (card.ItemType != result.ItemType || card.Translation != result.PrimaryTranslation ||
+                if (result.ReaderLanguage is { } reader && card.ReaderLanguage is { } cardReader && reader != cardReader) continue;
+                var sync = result.Processing?.ReviewSync;
+                var reviewed = sync is not null || (result.ReviewedBlocks.Count > 0 || result.Processing?.SectionChecks.Count > 0) &&
+                    result.Origin is DictionaryResultOrigin.Cache or DictionaryResultOrigin.Reviewed;
+                var matchesTranslation = card.Translation == result.PrimaryTranslation || sync?.KnownTranslations.Contains(card.Translation) == true;
+                if (reviewed && (card.ItemType != result.ItemType || !matchesTranslation ||
                     card.DictionaryCacheKey is { } key && result.CacheStamp?.Key != key)) continue;
-                updated ??= new(_store.Entries);
                 var refreshed = !reviewed ? ApplyDictionary(card, result, revision)
                     : result.ReviewedBlocks.Aggregate(card, (current, block) => ApplyReviewedBlock(current, result, block));
-                updated[i] = refreshed with
+                if (reviewed && sync is not null)
+                    refreshed = refreshed with
+                    {
+                        Translation = sync.ChangedHeadFields.Contains("primaryTranslation") ? result.PrimaryTranslation : refreshed.Translation,
+                        Domains = sync.ChangedHeadFields.Contains("domains") ? result.Domains : refreshed.Domains,
+                        Pronunciation = sync.ChangedHeadFields.Contains("pronunciation") ? result.Pronunciation : refreshed.Pronunciation,
+                        UkPhonetic = sync.ChangedHeadFields.Contains("ukPhonetic") ? result.UkPhonetic ?? "" : refreshed.UkPhonetic,
+                        UsPhonetic = sync.ChangedHeadFields.Contains("usPhonetic") ? result.UsPhonetic ?? "" : refreshed.UsPhonetic
+                    };
+                db.SaveCard(refreshed with
                 {
                     DictionaryContext = result.LookupContext, DictionaryRevision = revision,
-                    DictionaryCacheKey = result.CacheStamp?.Key, ReaderLanguage = result.ReaderLanguage, UpdatedAt = DateTimeOffset.UtcNow
-                };
+                    DictionaryCacheKey = result.CacheStamp?.Key, ReaderLanguage = result.ReaderLanguage,
+                    DictionaryProcessing = result.Processing, UpdatedAt = DateTimeOffset.UtcNow
+                });
+                updated = true;
             }
-            if (updated is null) return;
-            CommitOrganization(_store.Notebooks, updated);
-        }
-        Changed?.Invoke(this, EventArgs.Empty);
+            return updated;
+        });
+        if (changed) Changed?.Invoke(this, EventArgs.Empty);
     }
 
     private static string GetGrammarNotes(DictionaryEntryResult result) =>
@@ -99,9 +111,10 @@ public sealed partial class VocabularyService
         EntryBlock.Examples => card with { Examples = r.Examples },
         EntryBlock.Inflections => card with { Inflections = r.Inflections },
         EntryBlock.WordFamily => card with { WordFamily = r.WordFamily },
+        EntryBlock.PrimaryTranslation => card with { Translation = r.PrimaryTranslation },
         EntryBlock.LiteralTranslation => card with { LiteralTranslation = r.LiteralTranslation },
         EntryBlock.Source => card with { SourceReadingNote = r.SourceReadingNote },
-        EntryBlock.PronunciationPractice => card with { PronunciationTip = r.PronunciationTip },
+        EntryBlock.PronunciationPractice => card with { PronunciationTip = r.PronunciationTip, PronunciationDrills = r.PronunciationDrills },
         EntryBlock.Glossary => card with { GlossaryReferences = r.GlossaryReferences, GlossaryUsageNote = r.GlossaryUsageNote },
         EntryBlock.Alignment => card with { Alignment = r.Alignment },
         EntryBlock.KeyPoints => card with { KeyPoints = r.KeyPoints },
@@ -115,14 +128,14 @@ public sealed partial class VocabularyService
         EntryBlock.UsageContrasts => card with { UsageContrasts = r.UsageContrasts },
         EntryBlock.SynonymNuances => card with { SynonymNuances = r.SynonymNuances },
         EntryBlock.Mistakes => card with { Mistakes = r.Mistakes },
-        EntryBlock.UsageNotes => card with { GrammarOrUsageNote = GetGrammarNotes(r),
+        EntryBlock.UsageNotes => card with { GrammarOrUsageNote = GetGrammarNotes(r), UsageGuidance = r.UsageGuidance,
             WordChoice = r.WordChoice, CommonMistakes = r.CommonMistakes,
             DictionaryContextMeaning = r.ItemType.IsPassage() ? r.ContextMeaning : card.DictionaryContextMeaning },
-        EntryBlock.Tone => card with { Tone = r.Tone },
-        EntryBlock.Culture => card with { CulturalNote = r.CulturalNote },
+        EntryBlock.Tone => card with { Tone = r.Tone, ToneEvidence = r.ToneEvidence },
+        EntryBlock.Culture => card with { CulturalNote = r.CulturalNote, CulturalNotes = r.CulturalNotes },
         EntryBlock.Thesaurus => card with { Synonyms = r.Synonyms, Antonyms = r.Antonyms },
-        EntryBlock.WordFormation => card with { Morphemes = r.Morphemes, EtymologyAndRoot = r.EtymologyAndRoot ?? "" },
-        EntryBlock.Mnemonic => card with { MemoryMnemonic = r.MemoryMnemonic ?? "" },
+        EntryBlock.WordFormation => card with { Morphemes = r.Morphemes, EtymologyAndRoot = r.EtymologyAndRoot ?? "", EtymologyNotes = r.EtymologyNotes },
+        EntryBlock.Mnemonic => card with { MemoryMnemonic = r.MemoryMnemonic ?? "", Mnemonics = r.Mnemonics },
         EntryBlock.Tags => card with { SuggestedTags = r.SuggestedTags },
         _ => throw new ArgumentOutOfRangeException(nameof(block))
     };
@@ -158,12 +171,28 @@ public sealed partial class VocabularyService
         }).Distinct().ToArray();
     }
 
+    private static IReadOnlyList<UsageContrast> MergeRecapturedContrasts(IReadOnlyList<UsageContrast> incoming, IReadOnlyList<UsageContrast> saved)
+    {
+        if (incoming.Count == 0) return saved;
+        return incoming.Select(pair =>
+        {
+            var old = saved.FirstOrDefault(c => c.LeftForm == pair.LeftForm && c.RightForm == pair.RightForm);
+            var reversed = old is null ? saved.FirstOrDefault(c => c.RightForm == pair.LeftForm && c.LeftForm == pair.RightForm) : null;
+            return pair with
+            {
+                LeftExample = pair.LeftExample ?? old?.LeftExample ?? reversed?.RightExample,
+                RightExample = pair.RightExample ?? old?.RightExample ?? reversed?.LeftExample
+            };
+        }).ToArray();
+    }
+
     private static VocabularyEntry ApplyDictionary(VocabularyEntry card, DictionaryEntryResult result, long revision) => card with
     {
         Translation = result.PrimaryTranslation,
         LiteralTranslation = result.LiteralTranslation,
         DictionaryRevision = revision,
         DictionaryCacheKey = result.CacheStamp?.Key,
+        DictionaryProcessing = result.Processing,
         ReaderLanguage = result.ReaderLanguage,
         DictionaryContextMeaning = result.ContextMeaning,
         SuggestedTags = result.SuggestedTags,
@@ -171,6 +200,12 @@ public sealed partial class VocabularyService
         SourceReadingNote = result.SourceReadingNote,
         GlossaryUsageNote = result.GlossaryUsageNote,
         PronunciationTip = result.PronunciationTip,
+        PronunciationDrills = result.PronunciationDrills,
+        UsageGuidance = result.UsageGuidance,
+        EtymologyNotes = result.EtymologyNotes,
+        Mnemonics = result.Mnemonics,
+        CulturalNotes = result.CulturalNotes,
+        ToneEvidence = result.ToneEvidence,
         ItemType = result.ItemType,
         SourceLanguage = result.DetectedSourceLanguage,
         TargetLanguage = result.TargetLanguage,

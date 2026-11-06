@@ -14,11 +14,18 @@ public interface IAiTransport
     Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token);
     Task<AiCompletion> CompleteJsonAsync(IReadOnlyList<JsonObject> messages, Action<string> onText, CancellationToken token) =>
         CompleteAsync(messages, [], onText, token);
+    Task<AiCompletion> CompleteJsonAsync(IReadOnlyList<JsonObject> messages, Action<string> onText, CancellationToken token,
+        AiRequestOptions options)
+    {
+        options.Budget.Consume();
+        return CompleteJsonAsync(messages, onText, token);
+    }
 }
 
 public sealed class AiTransport(AiProviderConfig config, HttpClient? client = null) : IAiTransport, IDisposable
 {
     private readonly HttpClient _client = client ?? AiHttp.CreateClient();
+    private static readonly SemaphoreSlim DictionarySlots = new(2);
 
     public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token) =>
         SendAsync(messages, tools, onText, token, jsonOutput: false);
@@ -26,8 +33,16 @@ public sealed class AiTransport(AiProviderConfig config, HttpClient? client = nu
     public Task<AiCompletion> CompleteJsonAsync(IReadOnlyList<JsonObject> messages, Action<string> onText, CancellationToken token) =>
         SendAsync(messages, [], onText, token, jsonOutput: true);
 
+    public async Task<AiCompletion> CompleteJsonAsync(IReadOnlyList<JsonObject> messages, Action<string> onText, CancellationToken token,
+        AiRequestOptions options)
+    {
+        await DictionarySlots.WaitAsync(token).ConfigureAwait(false);
+        try { return await SendAsync(messages, [], onText, token, jsonOutput: true, options).ConfigureAwait(false); }
+        finally { DictionarySlots.Release(); }
+    }
+
     private async Task<AiCompletion> SendAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText,
-        CancellationToken token, bool jsonOutput)
+        CancellationToken token, bool jsonOutput, AiRequestOptions? options = null)
     {
         var provider = AiProviders.Resolve(config);
         var modelId = string.IsNullOrWhiteSpace(config.ModelId)
@@ -49,7 +64,7 @@ public sealed class AiTransport(AiProviderConfig config, HttpClient? client = nu
             body["tools"] = tools.DeepClone();
             body["tool_choice"] = "auto";
         }
-        body[provider.Id == "openai" ? "max_completion_tokens" : "max_tokens"] = 8192;
+        body[provider.Id == "openai" ? "max_completion_tokens" : "max_tokens"] = Math.Clamp(options?.MaxOutputTokens ?? 8192, 512, 8192);
         DisableThinking(body, provider, modelId);
 
         var payload = body.ToJsonString();
@@ -59,16 +74,18 @@ public sealed class AiTransport(AiProviderConfig config, HttpClient? client = nu
         {
             for (var attempt = 0; ; attempt++)
             {
+                options?.Budget.Consume();
                 using var request = new HttpRequestMessage(HttpMethod.Post, provider.BaseUrl + "chat/completions");
                 if (!string.IsNullOrWhiteSpace(config.ApiKey))
                     request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.ApiKey.Trim());
                 request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
                 using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
-                if (attempt == 0 && response.StatusCode == HttpStatusCode.ServiceUnavailable)
+                if (attempt == 0 && (response.StatusCode == HttpStatusCode.ServiceUnavailable ||
+                    options is not null && response.StatusCode == HttpStatusCode.TooManyRequests))
                 {
                     var retryAfter = response.Headers.RetryAfter;
                     var delay = retryAfter?.Delta ?? (retryAfter?.Date - DateTimeOffset.UtcNow) ?? TimeSpan.FromSeconds(2);
-                    if (delay <= TimeSpan.FromSeconds(5))
+                    if (delay <= TimeSpan.FromSeconds(5) && (options is null || options.Budget.TryReserveRetry()))
                     {
                         response.Dispose();
                         await Task.Delay(delay > TimeSpan.Zero ? delay : TimeSpan.Zero, timeout.Token).ConfigureAwait(false);

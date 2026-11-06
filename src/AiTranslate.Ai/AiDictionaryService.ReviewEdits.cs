@@ -8,8 +8,10 @@ public sealed partial class AiDictionaryService
     private static JsonArray ReviewEdits(JsonObject reply, JsonObject current)
     {
         if (reply["fields"] is null && reply["edits"] is JsonArray { Count: > 0 } edits) return edits;
+        // Older responses can still revise a legacy note when its section now also has structured rows.
+        // Only scalar fields accept this shorthand; collections must use the validated edits path.
         if (reply["edits"] is not null || reply["fields"] is not JsonObject { Count: > 0 } values ||
-            current.Any(p => p.Value is JsonArray or JsonObject)) throw InvalidEdits();
+            values.Any(p => !current.ContainsKey(p.Key) || current[p.Key] is JsonArray or JsonObject)) throw InvalidEdits();
         var result = new JsonArray();
         foreach (var (name, value) in values)
         {
@@ -131,6 +133,9 @@ public sealed partial class AiDictionaryService
             "senses" => ["partOfSpeech", "definitionZh"], "usageCases" => ["condition", "expression"],
             "examples" => ["sourceSentence"], "collocations" => ["phrase", "meaning"], "inflections" => ["label", "value"],
             "wordFamily" => ["value", "relation"], "usageContrasts" => ["leftForm", "rightForm"],
+            "usageGuidance" => ["title"], "pronunciationDrills" => ["focus", "text"],
+            "etymologyNotes" or "culturalNotes" => ["title"], "mnemonics" => ["method", "cue"],
+            "toneEvidence" => ["quote", "aspect"],
             "synonymNuances" => ["word"], "morphemes" => ["part"], "variants" or "translationOptions" => ["text"],
             "translationDecisions" => ["sourceQuote", "targetQuote"], "clauses" or "grammarHighlights" => ["quote"],
             "alignment" => ["source"], "mistakes" => ["wrong"], _ => []

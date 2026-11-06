@@ -153,18 +153,19 @@ internal sealed partial class DictionaryDetails
     private Control CreateSenseRow(Row row, PartOfSpeechSense sense)
     {
         var body = new StackPanel { Spacing = AppTheme.Space.S };
-        var head = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.XXS };
+        var head = new StackPanel { Spacing = AppTheme.Space.XXS };
         var definition = TextStyles.Selectable(sense.DefinitionZh, TextRole.Definition);
-        definition.VerticalAlignment = VerticalAlignment.Center;
         head.Children.Add(definition);
+        var qualifiers = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.XXS };
         if (!string.IsNullOrWhiteSpace(sense.GrammarLabel))
         {
-            var grammar = TextStyles.Create(sense.GrammarLabel, TextRole.FieldLabel);
+            var grammar = TextStyles.Selectable(sense.GrammarLabel, TextRole.Annotation);
             grammar.VerticalAlignment = VerticalAlignment.Center;
-            head.Children.Add(grammar);
+            qualifiers.Children.Add(grammar);
         }
-        if (!string.IsNullOrWhiteSpace(sense.Register)) head.Children.Add(Pill(sense.Register, TextRole.Meta));
-        if (row.SenseForm is { } form) head.Children.Add(CreateForm(form.Label, form.Value));
+        if (!string.IsNullOrWhiteSpace(sense.Register)) qualifiers.Children.Add(Pill(sense.Register, TextRole.Meta));
+        if (row.SenseForm is { } form) qualifiers.Children.Add(CreateForm(form.Label, form.Value));
+        if (qualifiers.Children.Count > 0) head.Children.Add(qualifiers);
         if (!string.IsNullOrWhiteSpace(sense.DefinitionEn) && !string.Equals(sense.DefinitionEn, sense.DefinitionZh, StringComparison.OrdinalIgnoreCase))
             body.Children.Add(TextStyles.Selectable(sense.DefinitionEn, TextRole.Gloss));
         if (sense.UsageCases.Count > 0) body.Children.Add(CreateUsageCases(sense));
@@ -181,7 +182,7 @@ internal sealed partial class DictionaryDetails
 
         var ordinal = Math.Max(row.Number, 1);
         var toggle = body.Children.Count == 0 ? null : _disclosures.Toggle(EntryBlock.Senses,
-            LexicalPart.From(sense.PartOfSpeech).Name, ordinal, sense.DefinitionZh, "详解", body, ordinal == 1);
+            LexicalPart.From(sense.PartOfSpeech).Name, ordinal, sense.DefinitionZh, "详解", body);
         return ReadingRow(row.Number, head, toggle, body);
     }
 }

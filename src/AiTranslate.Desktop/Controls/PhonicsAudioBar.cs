@@ -74,13 +74,34 @@ public static class PhonicsAudioBar
                 settings.Current.SpeechSpeed,
                 settings.Current.PreferredUkVoiceId, playback: playback)));
 
+        if (headword.Length <= 48)
+        {
+            CancellationTokenSource? pending = null;
+            wrap.AttachedToVisualTree += async (_, _) =>
+            {
+                using var lifetime = new CancellationTokenSource();
+                pending = lifetime;
+                try
+                {
+                    var prefs = settings.Current;
+                    await speech.PreparePronunciationAsync(headword, SpeechAccent.AmericanEnglish, usIpa,
+                        prefs.SpeechSpeed, prefs.PreferredUsVoiceId, lifetime.Token);
+                    if (!lifetime.IsCancellationRequested)
+                        await speech.PreparePronunciationAsync(headword, SpeechAccent.BritishEnglish, ukIpa,
+                            prefs.SpeechSpeed, prefs.PreferredUkVoiceId, lifetime.Token);
+                }
+                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+                finally { if (pending == lifetime) pending = null; }
+            };
+            wrap.DetachedFromVisualTree += (_, _) => pending?.Cancel();
+        }
         return wrap;
     }
 
     internal static void AddPracticeButtons(WrapPanel wrap, ISpeechSynthesisService speech, AppSettingsStore settings,
         string headword, string? usIpa, string? ukIpa, string? exampleSentence, bool compact = false)
     {
-        if (!headword.Any(char.IsWhiteSpace))
+        if (!headword.Any(char.IsWhiteSpace) && !(headword.Length > 1 && headword.All(char.IsUpper)))
         {
             var syllables = KokoroSpeechService.SplitIntoPhonicsSyllables(headword);
             var syllableHint = syllables.Count > 1 && !compact && headword.Length <= 18
@@ -129,6 +150,20 @@ public static class PhonicsAudioBar
             speed: settings.Current.SpeechSpeed,
             preferredVoiceId: accent == SpeechAccent.AmericanEnglish ? settings.Current.PreferredUsVoiceId : null,
             playback: playback);
+
+    internal static Button CreateDrillReadButton(ISpeechSynthesisService speech, AppSettingsStore settings,
+        PronunciationDrill drill, SpeechAccent accent, bool slow)
+    {
+        var label = slow ? "慢速跟读" : "示范朗读";
+        var button = CreateSpeechPill(slow ? "speedometer-slow" : "volume-high", label,
+            playback => speech.SpeakAsync(drill.Text, accent, ipaPhonetic: null,
+                speed: slow ? 0.68f : settings.Current.SpeechSpeed,
+                preferredVoiceId: accent == SpeechAccent.AmericanEnglish ? settings.Current.PreferredUsVoiceId : null,
+                playback: playback));
+        AutomationProperties.SetName(button, $"{label} · {drill.Focus}");
+        ToolTip.SetTip(button, $"{label}：{drill.Text}");
+        return button;
+    }
 
     private static Button CreateSpeechPill(string mdiIcon, string text, Func<SpeechPlayback, Task> speak, SpeechPlayback? playback = null) =>
         SpeechPlaybackButton.Create(click => BuildPill(mdiIcon, text, click), speak, playback);

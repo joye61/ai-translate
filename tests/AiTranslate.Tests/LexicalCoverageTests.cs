@@ -74,9 +74,12 @@ public sealed class LexicalCoverageTests
             var service = new AiDictionaryService(() => new LookupReply(request =>
             {
                 requests.Add(request);
-                return request["senses"] is null
-                    ? """{"primaryTranslation":"在场的","itemType":"Word","detectedSourceLanguage":"en","senses":[{"partOfSpeech":"adj.","definitionZh":"在场的"}]}"""
-                    : """
+                if ((string?)request["role"] == "learning") return PipelineReplies.Proposal(request.AsObject(), "not_applicable");
+                if (request["role"] is null)
+                    return """{"primaryTranslation":"在场的","itemType":"Word","detectedSourceLanguage":"en","senses":[{"partOfSpeech":"adj.","definitionZh":"在场的"}]}""";
+                var proposal = JsonNode.Parse(PipelineReplies.Proposal(request.AsObject(), "corrected", issues: new[] {
+                    new { field = "senses", sourceQuote = "present", reason = "遗漏常见名词义。", severity = "major" } }))!;
+                proposal["lexicalAdditions"] = JsonNode.Parse("""
                         {"senses":[{"partOfSpeech":"n.","definitionZh":"礼物","headTranslation":"礼物",
                           "example":{"sourceSentence":"The presents were wrapped.","translatedSentence":"那些礼品全都包好了。","highlightTerm":"presents","translationQuote":"礼品","definitionQuote":"礼物"}},
                           {"partOfSpeech":"v.","definitionZh":"提出","headTranslation":"提出","example":{
@@ -84,14 +87,15 @@ public sealed class LexicalCoverageTests
                          "inflections":[{"partOfSpeech":"noun","label":"复数","value":"presents"}],
                          "collocations":[{"phrase":"at present","meaning":"目前","example":{
                             "sourceSentence":"We have no vacancies at present.","translatedSentence":"我们目前没有空缺。","highlightTerm":"at present"}}]}
-                        """;
+                        """);
+                return proposal.ToJsonString();
             }), cache, readerLanguageId: () => "zh-Hans");
             var result = await service.LookupOrTranslateAsync("present", "zh-Hans", context);
-            Assert.Equal(2, requests.Count);
-            var reference = requests[1]["english_reference"]!;
+            Assert.Equal(3, requests.Count);
+            var reference = requests[2]["english_reference"]!;
             Assert.Equal(["n.", "v."], reference["missing_parts"]!.AsArray().Select(p => p!.GetValue<string>()));
             Assert.False(string.IsNullOrWhiteSpace(reference["usage_clues"]!["n."]!.GetValue<string>()));
-            Assert.Equal(context, requests[1]["context_sentence"]!.GetValue<string>());
+            Assert.Equal(context, requests[2]["context_sentence"]!.GetValue<string>());
             Assert.Equal(expected, result.PrimaryTranslation);
             Assert.True(result.LexicalCoverageReviewed);
             Assert.Equal(["adj.", "n."], result.Senses.Select(s => s.PartOfSpeech));
@@ -99,7 +103,7 @@ public sealed class LexicalCoverageTests
             var cached = await service.LookupOrTranslateAsync("present", "zh-Hans", context);
             Assert.Equal(DictionaryResultOrigin.Cache, cached.Origin);
             Assert.Equal(result.Senses, cached.Senses);
-            Assert.Equal(2, requests.Count);
+            Assert.Equal(3, requests.Count);
             var books = new VocabularyService(Path.Combine(folder.FullName, "books.json"));
             Assert.Equal(result.Collocations, books.AddOrUpdateFromDictionary(cached).ToDictionaryResult().Collocations);
         }
@@ -117,22 +121,23 @@ public sealed class LexicalCoverageTests
             var service = new AiDictionaryService(() => new LookupReply(request =>
             {
                 calls++;
-                if (calls == 1) return """{"primaryTranslation":"猫","itemType":"Word","detectedSourceLanguage":"fr"}""";
+                if (request["role"] is null) return """{"primaryTranslation":"猫","itemType":"Word","detectedSourceLanguage":"fr"}""";
                 Assert.Null(request["english_reference"]);
-                Assert.NotNull(request["senses"]);
-                return calls == 2 ? """{"senses":[]}""" : """{"senses":[],"collocations":[]}""";
+                if ((string?)request["role"] == "learning") return PipelineReplies.Proposal(request.AsObject(), "not_applicable");
+                Assert.NotNull(request["entry"]!["senses"]);
+                return calls == 3 ? """{"status":"accepted"}""" : PipelineReplies.Proposal(request.AsObject(), "accepted");
             }), cache, readerLanguageId: () => "zh-Hans");
             var first = await service.LookupOrTranslateAsync("chat", "zh-Hans");
             Assert.Equal("猫", first.PrimaryTranslation);
             Assert.False(first.LexicalCoverageReviewed);
             var offline = await new AiDictionaryService(() => null, cache, readerLanguageId: () => "zh-Hans").LookupOrTranslateAsync("chat", "zh-Hans");
             Assert.False(offline.LexicalCoverageReviewed);
-            var reviewed = await service.LookupOrTranslateAsync("chat", "zh-Hans");
+            var reviewed = await service.ReviewEntryAsync(offline, default);
             Assert.True(reviewed.LexicalCoverageReviewed);
             Assert.Equal(first.PrimaryTranslation, reviewed.PrimaryTranslation);
             Assert.Empty(reviewed.Collocations);
             Assert.True((await service.LookupOrTranslateAsync("chat", "zh-Hans")).LexicalCoverageReviewed);
-            Assert.Equal(3, calls);
+            Assert.Equal(4, calls);
         }
         finally { folder.Delete(true); }
     }
@@ -145,7 +150,7 @@ public sealed class LexicalCoverageTests
         var service = new AiDictionaryService(() => new LookupReply(request =>
         {
             calls++;
-            if (request["senses"] is null) return """{"primaryTranslation":"书","itemType":"Word"}""";
+            if (request["role"] is null) return """{"primaryTranslation":"书","itemType":"Word"}""";
             cancel.Cancel();
             return """{"senses":[],"collocations":[]}""";
         }), refreshCollectedEntries: (_, _) => Assert.Fail("A cancelled lookup reached the notebook."));

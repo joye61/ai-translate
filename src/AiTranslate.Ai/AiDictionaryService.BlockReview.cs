@@ -19,17 +19,18 @@ public sealed partial class AiDictionaryService
         EntryBlock.LiteralTranslation => ["literalTranslation"],
         EntryBlock.Source => ["sourceReadingNote"],
         EntryBlock.Glossary => ["glossaryUsageNote"],
-        EntryBlock.PronunciationPractice => ["pronunciationTip"],
+        EntryBlock.PronunciationPractice => ["pronunciationTip", "pronunciationDrills"],
         EntryBlock.Decisions => ["translationDecisions"],
         EntryBlock.Structure => ["clauses"],
         EntryBlock.Grammar => ["grammarHighlights"],
-        EntryBlock.Culture => ["culturalNote"],
+        EntryBlock.Culture => ["culturalNote", "culturalNotes"],
+        EntryBlock.Tone => ["tone", "toneEvidence"],
         EntryBlock.Thesaurus => ["synonyms", "antonyms"],
-        EntryBlock.WordFormation => ["morphemes", "etymologyAndRoot"],
-        EntryBlock.Mnemonic => ["memoryMnemonic"],
+        EntryBlock.WordFormation => ["morphemes", "etymologyAndRoot", "etymologyNotes"],
+        EntryBlock.Mnemonic => ["memoryMnemonic", "mnemonics"],
         EntryBlock.Tags => ["suggestedTags"],
-        EntryBlock.UsageNotes => entry.ItemType.IsPassage() ? ["grammarBreakdown", "usageNotes", "contextMeaning"] :
-            new[] { "grammarBreakdown", "usageNotes", entry.SynonymNuances.Count == 0 ? "wordChoice" : null,
+        EntryBlock.UsageNotes => entry.ItemType.IsPassage() ? ["grammarBreakdown", "usageNotes", "usageGuidance", "contextMeaning"] :
+            new[] { "grammarBreakdown", "usageNotes", "usageGuidance", entry.SynonymNuances.Count == 0 ? "wordChoice" : null,
                 entry.Mistakes.Count == 0 ? "commonMistakes" : null }.OfType<string>().ToArray(),
         _ => [JsonNamingPolicy.CamelCase.ConvertName(block.ToString())]
     };
@@ -43,30 +44,17 @@ public sealed partial class AiDictionaryService
         var started = DateTime.UtcNow.Ticks;
         var reader = entry.ReaderLanguage ?? DictionaryTranslationDirection.ReaderLanguage(readerLanguageId?.Invoke()).Id;
         var original = entry;
-        string? missingKey = null;
-        if (cache is not null)
-        {
-            // Saved cards can predate cache stamps or contain a lossy projection of the full lookup.
-            var (stored, key) = await Task.Run(() =>
-            {
-                if (entry.CacheStamp is { } stamp && cache.Read(stamp.Key) is { } exact) return (exact, stamp.Key);
-                var terms = lookupTerms?.Invoke(entry.SourceText, entry.TargetLanguage) ?? entry.GlossaryReferences;
-                var keys = LookupKeys(entry.SourceText, entry.TargetLanguage, reader, entry.LookupContext, terms);
-                return (cache.Read(keys.Current) ?? (keys.Legacy is null ? null : cache.Read(keys.Legacy)), keys.Current);
-            }, cancellationToken).ConfigureAwait(false);
-            if (stored is not null)
-            {
-                if (stored.SourceText != entry.SourceText || stored.PrimaryTranslation != entry.PrimaryTranslation ||
-                    stored.TargetLanguage != entry.TargetLanguage || stored.ItemType != entry.ItemType ||
-                    entry.CacheStamp is { } seen && seen != stored.CacheStamp) throw StaleEntry();
-                entry = stored with { LookupContext = entry.LookupContext };
-                reader = entry.ReaderLanguage ?? reader;
-            }
-            else missingKey = key;
-        }
-
+        var restored = await RestoreForReviewAsync(entry, reader, cancellationToken).ConfigureAwait(false);
+        entry = restored.Entry;
+        reader = entry.ReaderLanguage ?? reader;
+        var missingKey = restored.MissingKey;
+        var contentHash = ContentHash(entry);
+        if (entry.Processing is { PolicyVersion: DictionaryProcessing.CurrentPolicyVersion } receipt &&
+            receipt.SectionChecks.Any(s => s.Block == block && s.ContentHash == contentHash))
+            return original;
         var fields = EditableFields(block, entry);
-        var otherSectionFields = EntryBlockCatalog.For(entry.ItemType).Where(s => s.Block != block)
+        // A stray edit to the head translation from another block invalidates the reply.
+        var otherSectionFields = EntryBlockCatalog.For(entry.ItemType).Where(s => s.Block != block && s.Block != EntryBlock.PrimaryTranslation)
             .SelectMany(s => EditableFields(s.Block, entry)).ToHashSet(StringComparer.Ordinal);
         var wire = JsonSerializer.SerializeToNode(entry, BlockJson)!.AsObject();
         var background = wire.DeepClone().AsObject();
@@ -76,6 +64,7 @@ public sealed partial class AiDictionaryService
             current[field] = wire[field]?.DeepClone();
             background.Remove(field);
         }
+        background.Remove("processing");
         background.Remove("reviewedBlocks");
         background.Remove("lexicalCoverageReviewed");
         var messages = BlockReviewMessages(entry, spec, reader, fields, current, background);
@@ -100,18 +89,84 @@ public sealed partial class AiDictionaryService
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(response)) throw new AiException("引擎没有返回复核内容，请重新复核。");
         var reviewed = ApplyReview(entry, otherSectionFields, wire, current, response);
-        if (reviewed is null) return original;
+        // Old detached results have nowhere to store a receipt. On persisted/managed entries
+        // also remember a successful no-op, so clicking the same block again is free.
+        if (reviewed is null && entry.Processing is null && cache is null) return original;
+        var changed = reviewed is not null;
+        var changedBlocks = entry.ReviewedBlocks.ToHashSet();
+        if (changed) changedBlocks.Add(block);
+        reviewed ??= entry;
+        var state = entry.Processing ?? new DictionaryProcessing { Core = DictionaryStageState.Completed };
+        if (changed && state.Review is DictionaryStageState.Completed or DictionaryStageState.Unresolved)
+            state = state with { Review = DictionaryStageState.Invalidated, ReviewedContentHash = "", Issues = [], Message = "" };
+        if (changed && block == EntryBlock.Senses && entry.Processing is not null &&
+            !SameSenseInventory(entry.Senses, reviewed.Senses))
+        {
+            var patch = new JsonObject { ["senses"] = ContentWire(reviewed)["senses"]?.DeepClone() };
+            reviewed = MergeReviewedFields(entry, StageFields(entry, true), patch, out var cleared);
+            if (cleared)
+            {
+                state = state with { Extension = DictionaryStageState.Invalidated };
+                var before = ContentWire(entry);
+                var after = ContentWire(reviewed);
+                foreach (var specChanged in EntryBlockCatalog.For(entry.ItemType))
+                    if (EditableFields(specChanged.Block, entry).Any(key => !JsonNode.DeepEquals(before[key], after[key])))
+                        changedBlocks.Add(specChanged.Block);
+            }
+        }
+        var checkedHash = ContentHash(reviewed with { ReaderLanguage = reader, LookupContext = entry.LookupContext });
+        var checks = state.SectionChecks.Where(s => s.Block != block && s.ContentHash == checkedHash)
+            .Append(new DictionarySectionCheck(block, checkedHash, changed)).ToArray();
         var updated = reviewed with
         {
-            ReviewedBlocks = entry.ReviewedBlocks.Append(block).Distinct().ToArray(), ReaderLanguage = reader,
+            Processing = state with { SectionChecks = checks },
+            ReviewedBlocks = changedBlocks.ToArray(), ReaderLanguage = reader,
             LookupContext = entry.LookupContext, Origin = DictionaryResultOrigin.Reviewed, CacheStamp = entry.CacheStamp
         };
+        if (changed && block == EntryBlock.PrimaryTranslation)
+        {
+            updated = WithReviewSync(entry, updated);
+            if (entry.Alignment.Count > updated.Alignment.Count || entry.TranslationDecisions.Count > updated.TranslationDecisions.Count ||
+                entry.TranslationOptions.Count > updated.TranslationOptions.Count)
+                updated = updated with { Processing = updated.Processing! with { Extension = DictionaryStageState.Invalidated } };
+        }
         if (missingKey is null)
             return await PersistSupplementAsync(entry, updated, started, cancellationToken, DictionaryResultOrigin.Reviewed).ConfigureAwait(false);
         if (!await Task.Run(() => cache!.TryAdd(missingKey, updated, started), cancellationToken).ConfigureAwait(false)) throw StaleEntry();
         updated = updated with { CacheStamp = new(missingKey, started) };
         return SyncCollectedEntries(updated, started);
     }
+
+    private async Task<(DictionaryEntryResult Entry, string? MissingKey)> RestoreForReviewAsync(DictionaryEntryResult entry,
+        string reader, CancellationToken cancellationToken)
+    {
+        string? missingKey = null;
+        if (cache is not null)
+        {
+            // Saved cards can predate cache stamps or contain a lossy projection of the full lookup.
+            var (stored, key) = await Task.Run(() =>
+            {
+                if (entry.CacheStamp is { } stamp && cache.Read(stamp.Key) is { } exact) return (exact, stamp.Key);
+                var terms = lookupTerms?.Invoke(entry.SourceText, entry.TargetLanguage) ?? entry.GlossaryReferences;
+                var keys = LookupKeys(entry.SourceText, entry.TargetLanguage, reader, entry.LookupContext, terms);
+                if (entry.Processing?.Intent == DictionaryLookupIntent.Quick)
+                    return (cache.Read("quick:" + keys.Current), "quick:" + keys.Current);
+                return (cache.Read(keys.Current) ?? (keys.Legacy is null ? null : cache.Read(keys.Legacy)), keys.Current);
+            }, cancellationToken).ConfigureAwait(false);
+            if (stored is not null)
+            {
+                if (stored.SourceText != entry.SourceText || stored.PrimaryTranslation != entry.PrimaryTranslation ||
+                    stored.TargetLanguage != entry.TargetLanguage || stored.ItemType != entry.ItemType ||
+                    entry.CacheStamp is { } seen && seen != stored.CacheStamp) throw StaleEntry();
+                entry = stored with { LookupContext = entry.LookupContext };
+            }
+            else missingKey = key;
+        }
+        return (entry, missingKey);
+    }
+
+    private static bool SameSenseInventory(IReadOnlyList<PartOfSpeechSense> a, IReadOnlyList<PartOfSpeechSense> b) =>
+        a.Select(s => (s.PartOfSpeech, s.DefinitionZh)).Order().SequenceEqual(b.Select(s => (s.PartOfSpeech, s.DefinitionZh)).Order());
 
     private static DictionaryEntryResult? ApplyReview(DictionaryEntryResult entry, HashSet<string> otherSectionFields, JsonObject wire,
         JsonObject current, string response)
@@ -157,7 +212,6 @@ public sealed partial class AiDictionaryService
                 if (variant.Parent is JsonArray list && RepeatsTranslation(entry, variant)) list.Remove(variant);
 
             // Reuse the lookup parser for type-specific rules, quote anchors, row limits and deduplication.
-            // Only copy the edited fields back. Older data in unrelated fields must survive byte-for-byte.
             var parsed = ReadEntry(entry.SourceText, entry.TargetLanguage, JsonSerializer.SerializeToElement(wire), reviewOf: entry);
             if (changed.Contains("examples") && parsed.Examples.Except(entry.Examples).Any(e => string.IsNullOrWhiteSpace(e.TranslatedSentence)) ||
                 changed.Contains("collocations") && parsed.Collocations.Except(entry.Collocations).Any(c => string.IsNullOrWhiteSpace(c.Meaning) ||
@@ -166,12 +220,29 @@ public sealed partial class AiDictionaryService
                     DictionaryTextMatch.IndexOf(entry.PrimaryTranslation, a.Target, comparison: StringComparison.Ordinal) < 0))
                 throw InvalidEdits();
             var validated = JsonSerializer.SerializeToNode(parsed, BlockJson)!.AsObject();
+            if (changed.Contains("primaryTranslation"))
+            {
+                if (MissingPlaceholders(parsed).Any()) throw InvalidEdits("自然译文中的占位符必须与原文一致。");
+                // The parser rechecks target quotes and duplicate renderings. Keep legacy fields
+                // outside the entry type's catalog, which were never part of this review.
+                var dependents = new[] { EntryBlock.Alignment, EntryBlock.Decisions, EntryBlock.Variants, EntryBlock.LiteralTranslation };
+                foreach (var dependent in dependents.Where(b => EntryBlockCatalog.Applies(entry.ItemType, b)))
+                {
+                    var key = EditableFields(dependent, entry)[0];
+                    wire[key] = validated[key]?.DeepClone();
+                }
+                if (!entry.ItemType.IsPassage() && entry.TranslationOptions.Count > 0)
+                {
+                    var removed = entry.PrimaryRenderings().Except(parsed.PrimaryRenderings()).ToHashSet(StringComparer.Ordinal);
+                    wire["translationOptions"] = JsonSerializer.SerializeToNode(entry.TranslationOptions.Where(o => !removed.Contains(o.Text)), BlockJson);
+                }
+            }
             foreach (var field in changed)
             {
                 if (!RetainsContent(wire[field], validated[field])) throw InvalidEdits(field switch
                 {
-                    "synonymNuances" => "辨析表需有不同的词语及对应的区别说明，通常二至五项。",
-                    "morphemes" => "词素拆分需有二至五项，每项都要有词素、类型和含义。",
+                    "synonymNuances" => "辨析表需有至少两个不同的词语及对应的区别说明。",
+                    "morphemes" => "词素拆分需有至少两项，每项都要有词素、类型和含义。",
                     _ => "模型返回的栏目内容不完整或与原词条不符。"
                 });
                 wire[field] = validated[field]?.DeepClone();

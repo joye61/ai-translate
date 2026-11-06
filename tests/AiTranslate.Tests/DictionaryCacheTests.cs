@@ -140,6 +140,7 @@ public sealed class DictionaryCacheTests
         public int Calls;
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
+            if (PipelineReplies.TryEmptyStage(messages, out var stage)) return Task.FromResult(stage);
             if (JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!["senses"] is not null)
                 return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));
             Interlocked.Increment(ref Calls);
@@ -295,6 +296,7 @@ public sealed class DictionaryCacheTests
     {
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
+            if (PipelineReplies.TryEmptyStage(messages, out var stage)) return Task.FromResult(stage);
             var payload = JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!;
             if (payload["senses"] is not null)
                 return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));

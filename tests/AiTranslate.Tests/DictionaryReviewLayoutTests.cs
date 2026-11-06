@@ -9,6 +9,7 @@ using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using Xunit;
@@ -18,6 +19,80 @@ namespace AiTranslate.Tests;
 [Collection("Dictionary UI")]
 public sealed class DictionaryReviewLayoutTests
 {
+    [Fact]
+    public async Task AlignedSentencesReflowAsPairsAndKeepSelectionAndLookupDirection()
+    {
+        await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
+        await session.Dispatch(() =>
+        {
+            var pairs = new[] { new AlignedSentence("Although prices rose, demand held steady.", "尽管物价上涨，需求依然平稳。"),
+                new AlignedSentence("Shops stayed open.", "商店照常营业。") };
+            var queries = new List<(string Query, string Context)>();
+            var block = DictionaryInsightBlocks.Alignment(pairs, s => TextStyles.Selectable(s, TextRole.ExampleSource),
+                (q, context) => queries.Add((q, context)))!;
+            var window = new Window { Width = 800, Height = 500, Content = block };
+            window.Show();
+            try
+            {
+                var texts = block.GetVisualDescendants().OfType<SelectableTextBlock>().ToArray();
+                var original = texts.Single(t => t.Text == pairs[0].Source);
+                var translation = texts.Single(t => t.Text == pairs[0].Target);
+                var next = texts.Single(t => t.Text == pairs[1].Source);
+                translation.SelectAll();
+                foreach (var width in new[] { 760, 354, 760 })
+                {
+                    block.Width = width;
+                    window.UpdateLayout();
+                    var start = original.TranslatePoint(default, block)!.Value;
+                    var target = translation.TranslatePoint(default, block)!.Value;
+                    if (width == 354)
+                    {
+                        Assert.Equal(start.X, target.X, 1);
+                        Assert.True(target.Y >= start.Y + original.Bounds.Height);
+                    }
+                    else
+                    {
+                        Assert.True(target.X >= start.X + original.Bounds.Width);
+                        Assert.Equal(start.Y, target.Y, 1);
+                    }
+                    Assert.True(next.TranslatePoint(default, block)!.Value.Y >= target.Y + translation.Bounds.Height);
+                    Assert.Equal(pairs[0].Target, translation.SelectedText);
+                }
+                translation.RaiseEvent(new ContextRequestedEventArgs());
+                Assert.Equal((pairs[0].Target, pairs[0].Target), Assert.Single(queries));
+            }
+            finally { window.Close(); }
+        }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task LongVariantLabelsLeaveTheFullLineForTheTranslationAndItsCopyActionWorks()
+    {
+        await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
+        await session.Dispatch(() =>
+        {
+            var variant = new TranslationVariant("供研究报告与面向公众的新闻摘要使用的审慎书面表达", "尽管物价上涨，需求依然平稳。", "用于陈述调查结果。");
+            string? copied = null;
+            var block = DictionaryInsightBlocks.Variants([variant], true, s => copied = s, null)!;
+            var window = new Window { Width = 354, Height = 420, Content = block };
+            window.Show();
+            try
+            {
+                window.UpdateLayout();
+                var style = block.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == variant.Style);
+                var text = block.GetVisualDescendants().OfType<SelectableTextBlock>().Single(t => t.Text == variant.Text);
+                var copy = block.GetVisualDescendants().OfType<Button>().Single();
+                var labelEnd = style.TranslatePoint(new Point(style.Bounds.Width, style.Bounds.Height), block)!.Value;
+                Assert.True(labelEnd.X <= copy.TranslatePoint(default, block)!.Value.X);
+                Assert.True(labelEnd.Y <= text.TranslatePoint(default, block)!.Value.Y);
+                Assert.True(text.Bounds.Width > block.Bounds.Width * .85);
+                copy.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Assert.Equal(variant.Text, copied);
+            }
+            finally { window.Close(); }
+        }, CancellationToken.None);
+    }
+
     [Theory]
     [InlineData(3)]
     [InlineData(4)]

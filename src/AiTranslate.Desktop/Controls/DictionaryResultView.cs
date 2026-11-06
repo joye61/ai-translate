@@ -8,6 +8,7 @@ using Avalonia.Controls.Shapes;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
+using Avalonia.Threading;
 
 namespace AiTranslate.Desktop.Controls;
 
@@ -25,7 +26,8 @@ internal sealed class DictionaryResultView : StackPanel
     private readonly MdiIcon _statusIcon = new("sparkles", 13, AppTheme.Insight) { IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _status = new() { Text = "正在翻译…", FontSize = AppTheme.Type.Caption, Foreground = AppTheme.TextSecondary, VerticalAlignment = VerticalAlignment.Center };
     private readonly SelectableTextBlock _heading = new() { FontWeight = FontWeight.Bold, Foreground = AppTheme.TextPrimary, TextWrapping = TextWrapping.Wrap };
-    private readonly DictionaryTranslations _translations = new();
+    private readonly WrapPanel _titleLine;
+    private readonly DictionaryTranslations _translations = new(smoothPreview: true);
     private readonly Border _audio = new() { IsVisible = false };
     internal SpeechPlayback SourcePlayback { get; } = new();
     internal DictionaryDisclosures Disclosures { get; }
@@ -41,19 +43,24 @@ internal sealed class DictionaryResultView : StackPanel
     private readonly Control _readingHint;
     private readonly ContentControl _actions = new() { IsVisible = false, VerticalAlignment = VerticalAlignment.Top };
     private readonly ContentControl _secondaryActions = new() { VerticalAlignment = VerticalAlignment.Center };
-    private readonly Grid _footer;
+    private readonly Border _footer;
     private readonly SelectableTextBlock _errorText = new() { FontSize = AppTheme.Type.Small, Foreground = AppTheme.Danger, TextWrapping = TextWrapping.Wrap };
     private readonly Border _error;
-    private readonly Control _skeleton = CreateSkeleton();
+    private readonly Control _skeleton = new LoadingSkeleton { Margin = new Thickness(0, AppTheme.Space.XXL, 0, 0) };
     private CancellationTokenSource? _pulse;
     private (bool, string?, string?, string)? _audioKey;
     private IReadOnlyList<string> _shownDomains = [];
+    private (VocabularyItemType, string, string)? _formatKey;
+    private (string, StatusKind, string?)? _statusKey;
+    private DictionaryEntryResult? _pendingPreview;
+    private bool _previewQueued, _streamClosed;
 
     public DictionaryResultView(string query, string targetLanguage, ISpeechSynthesisService speech, AppSettingsStore settings,
         Action<string, string, bool> lookup, Action? goBack = null, string? contextSentence = null,
         DictionaryDisclosures? disclosures = null)
     {
         _query = query;
+        Classes.Add("dictionary-reading");
         _speech = speech;
         _settings = settings;
         _lookup = lookup;
@@ -101,10 +108,26 @@ internal sealed class DictionaryResultView : StackPanel
             Children = { hintIcon, _readingHintText }
         };
         Grid.SetColumn(_secondaryActions, 1);
-        _footer = new Grid
+        var toolbar = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = AppTheme.Space.L,
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto"),
+            ColumnSpacing = AppTheme.Space.L,
             Children = { _readingHint, _secondaryActions }
+        };
+        toolbar.SizeChanged += (_, e) =>
+        {
+            var compact = e.NewSize.Width < 550;
+            Grid.SetColumnSpan(_readingHint, compact ? 2 : 1);
+            Grid.SetColumn(_secondaryActions, compact ? 0 : 1);
+            Grid.SetColumnSpan(_secondaryActions, compact ? 2 : 1);
+            Grid.SetRow(_secondaryActions, compact ? 1 : 0);
+            _secondaryActions.HorizontalAlignment = compact ? HorizontalAlignment.Left : HorizontalAlignment.Right;
+            toolbar.RowSpacing = compact && _secondaryActions.Content is not null ? AppTheme.Space.XS : 0;
+        };
+        _footer = new Border
+        {
+            IsVisible = false, BorderBrush = AppTheme.BorderSubtle, BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(0, AppTheme.Space.S, 0, 0), Child = toolbar
         };
 
         _error = new Border
@@ -113,7 +136,7 @@ internal sealed class DictionaryResultView : StackPanel
             Padding = new Thickness(AppTheme.Space.M, AppTheme.Space.S + 2), Child = _errorText
         };
         // Headword and phonetics share a line; primary actions sit top-right instead of taking a row of their own.
-        var titleLine = new WrapPanel
+        _titleLine = new WrapPanel
         {
             ItemSpacing = AppTheme.Space.L, LineSpacing = AppTheme.Space.XS, Children = { _heading, _audio }
         };
@@ -124,58 +147,23 @@ internal sealed class DictionaryResultView : StackPanel
             Children = { meta, _actions }
         };
         Children.Add(header);
-        Children.Add(Spaced(titleLine, AppTheme.Space.S));
-        Children.Add(Spaced(_translations, AppTheme.Space.S + 2));
+        Children.Add(Spaced(_titleLine, AppTheme.Space.S));
+        Children.Add(Spaced(_translations, AppTheme.Space.M));
         Children.Add(Spaced(_error, AppTheme.Space.M));
         if (!string.IsNullOrWhiteSpace(contextSentence) && contextSentence != query)
             Children.Add(Spaced(CreateContextQuote(contextSentence, query), AppTheme.Space.M));
-        Children.Add(Spaced(_footer, AppTheme.Space.S));
+        Children.Add(Spaced(_footer, AppTheme.Space.L));
         Children.Add(_details);
         Children.Add(_skeleton);
         var hint = DictionaryQuery.SuggestType(query);
         SetFormat(hint, "auto", targetLanguage);
         if (hint.IsPassage()) _details.ShowSource(query);
         SetStatus("正在翻译…", StatusKind.Working);
+        AttachedToVisualTree += (_, _) =>
+        {
+            if (_statusKey?.Item2 == StatusKind.Working) StartPulse();
+        };
         DetachedFromVisualTree += (_, _) => StopPulse();
-    }
-
-    /// <summary>Placeholder lines shown while sections are still streaming in.</summary>
-    private static Control CreateSkeleton()
-    {
-        static Border Bar(double width, double height = 12) => new()
-        {
-            Width = width, Height = height, HorizontalAlignment = HorizontalAlignment.Left,
-            CornerRadius = new CornerRadius(AppTheme.Radius.Pill), Background = AppTheme.CardElevatedBg
-        };
-        var content = new StackPanel
-        {
-            Spacing = AppTheme.Space.M, Margin = new Thickness(0, AppTheme.Space.XXL, 0, 0),
-            Children =
-            {
-                Bar(96, 14), Bar(320), Bar(260), Bar(200)
-            }
-        };
-        CancellationTokenSource? shimmer = null;
-        content.AttachedToVisualTree += (_, _) =>
-        {
-            shimmer = new CancellationTokenSource();
-            _ = new Animation
-            {
-                Duration = TimeSpan.FromMilliseconds(900), IterationCount = IterationCount.Infinite,
-                PlaybackDirection = PlaybackDirection.Alternate, Easing = new Avalonia.Animation.Easings.SineEaseInOut(),
-                Children =
-                {
-                    new KeyFrame { Cue = new Cue(0), Setters = { new Setter(OpacityProperty, 1d) } },
-                    new KeyFrame { Cue = new Cue(1), Setters = { new Setter(OpacityProperty, 0.45d) } }
-                }
-            }.RunAsync(content, shimmer.Token);
-        };
-        content.DetachedFromVisualTree += (_, _) =>
-        {
-            shimmer?.Cancel();
-            shimmer?.Dispose();
-        };
-        return content;
     }
 
     private static Control Spaced(Control control, double top)
@@ -198,24 +186,21 @@ internal sealed class DictionaryResultView : StackPanel
         }
         var body = new StackPanel
         {
-            Spacing = 2,
+            Spacing = AppTheme.Space.XXS,
             Children =
             {
                 TextStyles.Create("查词原句", TextRole.Label),
                 text
             }
         };
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = AppTheme.Space.S,
-            Children = { new MdiIcon("format-quote-open", 16, AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Top }, body }
-        };
-        Grid.SetColumn(body, 1);
-        return grid;
+        return RichBlocks.Quote(body);
     }
 
     private void SetFormat(VocabularyItemType type, string sourceLanguage, string targetLanguage)
     {
+        var key = (type, sourceLanguage, targetLanguage);
+        if (_formatKey == key) return;
+        _formatKey = key;
         var passage = type.IsPassage();
         _kind.Text = UiLabels.ItemType(type);
         var kindHue = HueMap.ItemType(type);
@@ -229,8 +214,9 @@ internal sealed class DictionaryResultView : StackPanel
             _languages.Children.Add(new MdiIcon("arrow-right", 12, AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Center });
             _languages.Children.Add(MetaText(UiLabels.Language(targetLanguage)));
         }
-        _heading.Text = passage ? "译文" : _query;
-        TextStyles.Apply(_heading, passage ? TextRole.PageTitle : TextRole.Display);
+        _heading.Text = _query;
+        _titleLine.IsVisible = !passage;
+        TextStyles.Apply(_heading, TextStyles.HeadwordRole(_query));
     }
 
     private static TextBlock MetaText(string text) => new()
@@ -240,6 +226,10 @@ internal sealed class DictionaryResultView : StackPanel
 
     private void SetStatus(string text, StatusKind kind, string? icon = null)
     {
+        var key = (text, kind, icon);
+        if (_statusKey == key) return;
+        _statusKey = key;
+        ToolTip.SetTip(_status, null);
         _status.Text = text;
         _status.Foreground = kind == StatusKind.Error ? AppTheme.Danger : AppTheme.TextMuted;
         _statusIcon.IsVisible = icon is not null;
@@ -286,11 +276,51 @@ internal sealed class DictionaryResultView : StackPanel
 
     public void ShowTranslation(string text)
     {
-        _translations.ShowPreview(text, DictionaryQuery.SuggestType(_query));
+        if (_streamClosed) return;
+        if (_pendingPreview is { } pending) _pendingPreview = pending with { PrimaryTranslation = text };
+        _translations.ShowPreview(text, _formatKey?.Item1 ?? DictionaryQuery.SuggestType(_query));
         if (_status.Text == "正在翻译…") SetStatus("正在生成…", StatusKind.Working);
     }
 
     public void ShowEntry(DictionaryEntryResult entry, bool complete)
+    {
+        if (complete)
+        {
+            _streamClosed = true;
+            _pendingPreview = null;
+            RenderEntry(entry, complete: true);
+            return;
+        }
+        if (_streamClosed) return;
+        // Network bursts can post several snapshots before one UI frame. Render only the latest one.
+        _pendingPreview = entry;
+        if (_previewQueued) return;
+        _previewQueued = true;
+        Dispatcher.UIThread.Post(FlushEntryPreview, DispatcherPriority.Background);
+    }
+
+    private void FlushEntryPreview()
+    {
+        _previewQueued = false;
+        if (_pendingPreview is not { } entry) return;
+        _pendingPreview = null;
+        RenderEntry(entry, complete: false);
+    }
+
+    internal static string? QualityStatus(DictionaryEntryResult entry) => entry.Processing switch
+    {
+        { Review: DictionaryStageState.Running } => "正在核对译文和解析…",
+        { Extension: DictionaryStageState.Running } => "正在补充学习解析…",
+        { Review: DictionaryStageState.Failed } => "译文可用 · 审校未完成",
+        { Review: DictionaryStageState.Unresolved } => "有待确认的译义",
+        { Extension: DictionaryStageState.Failed } => "译文可用 · 学习解析未完成",
+        { Intent: DictionaryLookupIntent.Learning, Extension: DictionaryStageState.Invalidated } => "已修正 · 部分解析待补",
+        { Review: DictionaryStageState.Invalidated } => "内容已更新 · 待核对",
+        { Review: DictionaryStageState.Completed } => "译文与现有解析已核对",
+        _ => null
+    };
+
+    private void RenderEntry(DictionaryEntryResult entry, bool complete)
     {
         SetFormat(entry.ItemType, entry.DetectedSourceLanguage, entry.TargetLanguage);
         if (!_shownDomains.SequenceEqual(entry.Domains))
@@ -303,6 +333,11 @@ internal sealed class DictionaryResultView : StackPanel
         }
         _translations.ShowEntry(entry, complete ? (q, context) => _lookup(q, context, true) : null, complete ? BlockReviews : null);
         if (complete && entry.NotebookSyncPending) SetStatus("已缓存 · 生词本待同步", StatusKind.Done, "database-outline");
+        else if (QualityStatus(entry) is { } status)
+        {
+            SetStatus(status, complete ? StatusKind.Done : StatusKind.Working, complete ? "sparkles" : null);
+            ToolTip.SetTip(_status, string.IsNullOrWhiteSpace(entry.Processing?.Message) ? null : entry.Processing.Message);
+        }
         else if (complete)
             switch (entry.Origin)
             {
@@ -316,10 +351,12 @@ internal sealed class DictionaryResultView : StackPanel
         _details.ShowEntry(entry, complete);
         if (complete)
         {
+            DictionaryReadingText.EnableSelectionLookup(this, (q, context) => _lookup(q, context, false));
             _readingHintText.Text = _translations.HasLinkedTerms || entry.Collocations.Count > 0 || entry.GlossaryReferences.Count > 0
-                ? "点击下划线词语查词 · 也可选中文字后右键查询" : "选中文字后右键即可查词";
+                ? "单击下划线词语，或选中正文后右键查词" : "选中正文后右键查词";
             if (entry.GrammarHighlights.Count > 0) _readingHintText.Text += " · 紫底标出关键语法";
             _readingHint.IsVisible = true;
+            _footer.IsVisible = true;
         }
         var showIpa = PhonicsAudioBar.HasEnglishAudio(entry);
         var key = (showIpa, entry.UsPhonetic, entry.UkPhonetic, entry.Pronunciation);
@@ -344,16 +381,27 @@ internal sealed class DictionaryResultView : StackPanel
         _secondaryActions.Content = secondary;
     }
 
+    public void EnableSupplementActions(bool enabled) => _secondaryActions.IsEnabled = enabled;
+
     public void MarkStopped()
     {
+        EndStream();
         SetStatus("已停止生成", StatusKind.Done);
         Children.Remove(_skeleton);
     }
     public void ShowError(string message)
     {
+        EndStream();
         SetStatus("未完成", StatusKind.Error);
         Children.Remove(_skeleton);
         _errorText.Text = message;
         _error.IsVisible = true;
+    }
+
+    private void EndStream()
+    {
+        _streamClosed = true;
+        FlushEntryPreview();
+        _translations.FinishPreview();
     }
 }

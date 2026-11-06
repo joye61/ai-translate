@@ -27,9 +27,12 @@ public sealed class SpeechPreloadTests
             Assert.False(preload.IsCompleted);
             Assert.Same(preload, speech.EnsureKokoroModelReadyAsync());
             using var cancel = new CancellationTokenSource();
-            var firstReading = speech.SpeakAsync("test", cancellationToken: cancel.Token);
+            var playback = new SpeechPlayback();
+            var firstReading = speech.SpeakAsync("test", cancellationToken: cancel.Token, playback: playback);
+            Assert.Equal(SpeechPlaybackState.Preparing, playback.State);
             cancel.Cancel();
             await firstReading.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(SpeechPlaybackState.Idle, playback.State);
             Assert.False(preload.IsCompleted);
         }
         finally { release.Set(); }

@@ -20,7 +20,7 @@ internal sealed class BlockReviewActions
     private const string ButtonLabel = "智能复核";
     private sealed record ActionView(Button Button, TextBlock Label, MdiIcon Icon, TextBlock Error, Action<DictionaryEntryResult> Render);
     private readonly Dictionary<EntryBlock, ActionView> _actions = [];
-    private bool _busy;
+    public bool IsBusy { get; private set; }
 
     public static TextBlock CreateError()
     {
@@ -40,19 +40,19 @@ internal sealed class BlockReviewActions
             Classes = { "ai-review" }, MinHeight = 28, Padding = new Thickness(AppTheme.Space.M - 2, 2),
             CornerRadius = new CornerRadius(AppTheme.Radius.Pill), Background = AppTheme.InsightSoft,
             BorderBrush = Brushes.Transparent, BorderThickness = new Thickness(1), VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right, IsEnabled = !_busy,
+            HorizontalAlignment = HorizontalAlignment.Right, IsEnabled = !IsBusy,
             Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = AppTheme.Space.XS, Children = { icon, label } }
         };
         AutomationProperties.SetName(button, $"{ButtonLabel} · {spec.Title}");
-        ToolTip.SetTip(button, $"单独请求一次 AI 审阅「{spec.Title}」，有实质改进时保存");
-        button.Click += (_, _) => { if (!_busy) Requested?.Invoke(spec.Block); };
+        ToolTip.SetTip(button, $"核对「{spec.Title}」。内容和语境相同时复用该栏的核对结果");
+        button.Click += (_, _) => { if (!IsBusy) Requested?.Invoke(spec.Block); };
         _actions[spec.Block] = new(button, label, icon, error, render);
         return button;
     }
 
     public void SetBusy(bool busy, EntryBlock? active = null)
     {
-        _busy = busy;
+        IsBusy = busy;
         foreach (var (block, view) in _actions)
         {
             view.Button.IsEnabled = !busy;
@@ -80,11 +80,11 @@ internal sealed class BlockReviewActions
                 showingDraft = true;
             }));
             token.ThrowIfCancellationRequested();
-            feedback = ReferenceEquals(result, original) ? "无需调整" : "已更新";
+            feedback = SectionChanged(original, result, block) ? "已更新" : "无需调整";
             return result;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch (Exception ex)
+        catch (Exception ex) when (!token.IsCancellationRequested)
         {
             view.Error.Text = $"{ex.Message.TrimEnd('。', ' ')}。已保留原内容。";
             view.Error.IsVisible = true;
@@ -98,6 +98,9 @@ internal sealed class BlockReviewActions
             if (feedback is not null) Feedback(block, feedback);
         }
     }
+
+    internal static bool SectionChanged(DictionaryEntryResult original, DictionaryEntryResult result, EntryBlock block) =>
+        !ReferenceEquals(original, result) && (result.Processing?.SectionChecks.LastOrDefault(s => s.Block == block)?.Changed ?? true);
 
     private void Feedback(EntryBlock block, string message)
     {

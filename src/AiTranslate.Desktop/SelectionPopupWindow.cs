@@ -10,6 +10,7 @@ using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 
 namespace AiTranslate.Desktop;
 
@@ -40,6 +41,8 @@ public sealed class SelectionPopupWindow : Window
     private DictionaryEntryResult? _bookmarkEntry;
     private DictionaryEntryResult? _currentResult;
     private CapturedTextEvent? _currentCapture;
+    private PixelPoint? _cursorAnchor;
+    private bool _positioning;
 
     public SelectionPopupWindow(
         IAiDictionaryService dictionaryService,
@@ -58,7 +61,7 @@ public sealed class SelectionPopupWindow : Window
         Title = "AI 灵动划词翻译";
         Width = 420;
         SizeToContent = SizeToContent.Height;
-        MaxHeight = 460;
+        MaxHeight = SelectionPopupPlacement.HeightLimit;
         WindowDecorations = WindowDecorations.None;
         Topmost = true;
         ShowActivated = false;
@@ -113,7 +116,6 @@ public sealed class SelectionPopupWindow : Window
         var inset = AppTheme.ScrollContentInset;
         var headerBar = new Grid
         {
-            Margin = inset,
             ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto,Auto,Auto,Auto"),
             ColumnSpacing = 6,
             Children =
@@ -142,9 +144,18 @@ public sealed class SelectionPopupWindow : Window
         headerBar.Children.Add(expandBtn);
         headerBar.Children.Add(closeBtn);
 
+        // Include the top/side padding and gaps between buttons in the drag surface.
+        var header = new Border
+        {
+            Name = "SelectionPopupHeader",
+            Background = Brushes.Transparent,
+            Padding = new Thickness(inset.Left, 14, inset.Right, 10),
+            Child = headerBar
+        };
+
         _headwordText = TextStyles.Apply(new TextBlock
         {
-            Margin = inset,
+            Margin = new Thickness(inset.Left, 10, inset.Right, 10),
             TextWrapping = TextWrapping.Wrap,
             MaxLines = 3
         }, TextRole.PageTitle);
@@ -162,14 +173,13 @@ public sealed class SelectionPopupWindow : Window
             BorderBrush = AppTheme.BorderStrong,
             BorderThickness = new Thickness(1.5),
             CornerRadius = new CornerRadius(12),
-            Padding = new Thickness(0, 14),
+            Padding = new Thickness(0, 0, 0, 14),
             Child = new Grid
             {
                 RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*"),
-                RowSpacing = 10,
                 Children =
                 {
-                    headerBar,
+                    header,
                     new Border { [Grid.RowProperty] = 1, Height = 1, Margin = inset, Background = AppTheme.BorderSubtle },
                     _headwordText,
                     _bodyHost
@@ -179,12 +189,11 @@ public sealed class SelectionPopupWindow : Window
         Grid.SetRow(_headwordText, 2);
         Grid.SetRow(_bodyHost, 3);
 
-        // Allow dragging popup by header
-        headerBar.PointerPressed += (_, e) =>
-        {
-            if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-                BeginMoveDrag(e);
-        };
+        EnableHeaderDrag(header);
+
+        Opened += (_, _) => ConstrainToWorkingArea();
+        SizeChanged += (_, _) => ConstrainToWorkingArea();
+        ScalingChanged += (_, _) => ConstrainToWorkingArea();
 
         KeyDown += (_, e) =>
         {
@@ -248,7 +257,8 @@ public sealed class SelectionPopupWindow : Window
 
         RefreshBookmark();
 
-        PositionNearCursor(captured.ScreenPoint);
+        _cursorAnchor = new PixelPoint((int)captured.ScreenPoint.X, (int)captured.ScreenPoint.Y);
+        ConstrainToWorkingArea(beforeShow: true);
         if (!IsVisible) Show();
 
         try
@@ -262,7 +272,7 @@ public sealed class SelectionPopupWindow : Window
                 {
                     if (_lookup == request) body.ShowEntry(partial, complete: false);
                 }),
-                forceRefresh: forceRefresh,
+                forceRefresh: forceRefresh, intent: DictionaryLookupIntent.Quick,
                 onUsableEntry: entry => Dispatcher.UIThread.Post(() =>
                 {
                     if (_lookup != request) return;
@@ -310,6 +320,11 @@ public sealed class SelectionPopupWindow : Window
         _bookmarkEntry = result;
         RefreshBookmark();
         if (result.Origin == DictionaryResultOrigin.Cache) _sourceTagText.Text = "本地缓存";
+        if (DictionaryResultView.QualityStatus(result) is { } status)
+        {
+            _sourceTagText.Text = status;
+            ToolTip.SetTip(_sourceTagText, result.Processing?.Message);
+        }
         body.ShowEntry(result, complete: true);
     }
 
@@ -327,22 +342,75 @@ public sealed class SelectionPopupWindow : Window
             _vocabularyService.IsCollected(_bookmarkEntry, _settings.Current.DefaultNotebookId));
     }
 
-    private void PositionNearCursor(PointD cursor)
+    private void EnableHeaderDrag(Border header)
     {
-        var x = (int)cursor.X + 14;
-        var y = (int)cursor.Y + 18;
-
-        // Clamp against the bounds of the monitor the cursor is actually on, not a hardcoded (0,0)-based
-        // minimum: secondary monitors placed above/left of the primary have negative origin coordinates,
-        // so Math.Max(16, ...) against a global floor would yank the popup onto the wrong monitor.
-        var bounds = Screens?.ScreenFromPoint(new PixelPoint((int)cursor.X, (int)cursor.Y))?.WorkingArea;
-        if (bounds is { } area)
+        IPointer? dragging = null;
+        Point grabOffset = default;
+        header.PointerPressed += (_, e) =>
         {
-            x = Math.Clamp(x, area.X + 8, Math.Max(area.X + 8, area.Right - 8));
-            y = Math.Clamp(y, area.Y + 8, Math.Max(area.Y + 8, area.Bottom - 8));
-        }
+            if (dragging is not null || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed ||
+                e.Source is Visual hit && hit.GetSelfAndVisualAncestors().Any(v => v is Button)) return;
+            _cursorAnchor = null;
+            if (OperatingSystem.IsWindows())
+            {
+                // Keep the entire card above the taskbar even during a manual drag.
+                grabOffset = e.GetPosition(this);
+                dragging = e.Pointer;
+                e.Pointer.Capture(header);
+            }
+            else BeginMoveDrag(e);
+            e.Handled = true;
+        };
+        header.PointerMoved += (_, e) =>
+        {
+            if (dragging != e.Pointer) return;
+            var pointer = this.PointToScreen(e.GetPosition(this));
+            var screen = Screens.ScreenFromPoint(pointer);
+            var scale = screen?.Scaling ?? RenderScaling;
+            var position = pointer - PixelPoint.FromPoint(grabOffset, scale);
+            if (screen is not null)
+                position = SelectionPopupPlacement.Constrain(position, FrameSize ?? ClientSize, scale, screen.WorkingArea);
+            if (Position != position) Position = position;
+            e.Handled = true;
+        };
+        header.PointerReleased += (_, e) =>
+        {
+            if (dragging != e.Pointer || e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+            e.Pointer.Capture(null);
+            e.Handled = true;
+        };
+        header.PointerCaptureLost += (_, _) => dragging = null;
+    }
 
-        Position = new PixelPoint(x, y);
+    private void ConstrainToWorkingArea(bool beforeShow = false)
+    {
+        if (_positioning || (!IsVisible && !beforeShow)) return;
+        _positioning = true;
+        try
+        {
+            // Follow the capture monitor as content grows. After a drag, keep the user's
+            // chosen position and fit any further growth on the window's new monitor.
+            var screen = (_cursorAnchor is { } point ? Screens.ScreenFromPoint(point) : null)
+                ?? Screens.ScreenFromWindow(this) ?? Screens.Primary;
+            var position = _cursorAnchor + new PixelPoint(14, 18) ?? Position;
+            if (screen is not null)
+            {
+                var maximum = SelectionPopupPlacement.MaximumSize(screen.WorkingArea, screen.Scaling);
+                MaxWidth = maximum.Width;
+                MaxHeight = maximum.Height;
+                var size = FrameSize ?? ClientSize;
+                if (beforeShow && Content is Control card)
+                {
+                    // A hidden Window can have an empty or stale DesiredSize from the previous lookup.
+                    var width = Math.Min(Width, MaxWidth);
+                    card.Measure(new Size(width, MaxHeight));
+                    size = new Size(width, card.DesiredSize.Height);
+                }
+                position = SelectionPopupPlacement.Constrain(position, size, screen.Scaling, screen.WorkingArea);
+            }
+            if (Position != position) Position = position;
+        }
+        finally { _positioning = false; }
     }
 
     private static Button CreateIconButton(string icon, string tooltip, Action onClick)

@@ -46,7 +46,7 @@ public sealed class TranslationOptionTests
               {"text":"compare","meaning":"比较","usage":"可讨论相同点和不同点"},
               {"text":"contrast","meaning":"对照","usage":"强调差别"}]}
             """), readerLanguageId: () => "zh-Hans");
-        var entry = await service.LookupOrTranslateAsync("对比", "en");
+        var entry = await service.LookupOrTranslateAsync("对比", "en", intent: DictionaryLookupIntent.Quick);
         Assert.Single(calls);
         Assert.Equal(2, entry.TranslationOptions.Count);
     }
@@ -88,8 +88,13 @@ public sealed class TranslationOptionTests
             var payload = JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!;
             if (payload["senses"] is not null)
                 return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));
+            if ((string?)payload["role"] == "review")
+                return Task.FromResult(new AiCompletion(PipelineReplies.Proposal(payload.AsObject(), "accepted"), []));
             calls.Add(payload);
-            return Task.FromResult(new AiCompletion(responses[calls.Count - 1], []));
+            var response = responses[calls.Count - 1];
+            if ((string?)payload["role"] == "learning")
+                response = PipelineReplies.Proposal(payload.AsObject(), "completed", JsonNode.Parse(response));
+            return Task.FromResult(new AiCompletion(response, []));
         }
     }
 }

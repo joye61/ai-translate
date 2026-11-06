@@ -92,24 +92,21 @@ public sealed class MainWindow : Window
             },
             onQuickSaveToNotebook: (source, translated) =>
             {
-                Dispatcher.UIThread.Post(() =>
+                var entry = new DictionaryEntryResult
                 {
-                    var entry = new DictionaryEntryResult
-                    {
-                        SourceText = source,
-                        PrimaryTranslation = translated,
-                        TargetLanguage = _settingsStore.Current.DefaultTargetLanguage,
-                        ItemType = DictionaryQuery.SuggestType(source),
-                        Senses = [new("截图译文", translated)]
-                    };
-                    _vocabularyService.AddOrUpdateFromDictionary(
-                        entry,
-                        _settingsStore.Current.DefaultNotebookId,
-                        contextSentence: source,
-                        source: TranslationTriggerSource.ScreenshotOcr,
-                        sourceTitle: "XCapture 截图原位翻译");
-                    SetStatus($"已将截图识别内容收录至生词本！");
-                });
+                    SourceText = source,
+                    PrimaryTranslation = translated,
+                    TargetLanguage = _settingsStore.Current.DefaultTargetLanguage,
+                    ItemType = DictionaryQuery.SuggestType(source),
+                    Senses = [new("截图译文", translated)]
+                };
+                _vocabularyService.AddOrUpdateFromDictionary(
+                    entry,
+                    _settingsStore.Current.DefaultNotebookId,
+                    contextSentence: source,
+                    source: TranslationTriggerSource.ScreenshotOcr,
+                    sourceTitle: "XCapture 截图原位翻译");
+                SetStatus($"已将截图识别内容收录至生词本！");
             });
 
         _selectionPopup = new SelectionPopupWindow(
@@ -123,8 +120,13 @@ public sealed class MainWindow : Window
                 {
                     ShowAndActivate();
                     SwitchTab(0);
-                    _dictionaryView!.DisplayResult(result, captured.Source, captured.SourceWindowTitle);
-                    if (translation is not null) _dictionaryView.LookupRelated(translation, context ?? "", fromTranslation: true);
+                    if (translation is null)
+                        _ = _dictionaryView!.OpenDetailsAsync(result, captured.Source, captured.SourceWindowTitle);
+                    else
+                    {
+                        _dictionaryView!.DisplayResult(result, captured.Source, captured.SourceWindowTitle);
+                        _dictionaryView.LookupRelated(translation, context ?? "", fromTranslation: true);
+                    }
                 });
             }, _platform);
 

@@ -7,7 +7,7 @@ public enum EntryBlock
     Senses, LiteralMeaning, ContextMeaning, Inflections, Collocations, Examples,
     UsageContrasts, SynonymNuances, Mistakes, UsageNotes, Tone, Culture,
     Thesaurus, WordFamily, WordFormation, Mnemonic, Tags, Glossary, TranslationOptions, LiteralTranslation, Alignment,
-    PronunciationPractice
+    PronunciationPractice, PrimaryTranslation
 }
 
 /// <summary>
@@ -23,6 +23,7 @@ public sealed record EntryBlockSpec(EntryBlock Block, string Title, EntryBlockTi
 public static class EntryBlockCatalog
 {
     // Shared by every item type, in the translation header before the type-specific detail blocks.
+    public static EntryBlockSpec PrimaryTranslation { get; } = new(EntryBlock.PrimaryTranslation, "自然译文", EntryBlockTier.Core);
     public static EntryBlockSpec LiteralTranslation { get; } = new(EntryBlock.LiteralTranslation, "直译对照", EntryBlockTier.Extended);
 
     private static readonly EntryBlock[] WordOrder =
@@ -65,7 +66,7 @@ public static class EntryBlockCatalog
         VocabularyItemType.TechnicalTerm => TermOrder,
         VocabularyItemType.Sentence => SentenceOrder,
         _ => ParagraphOrder
-    }).Select(block => Spec(block, type)).Prepend(LiteralTranslation).ToArray();
+    }).Select(block => Spec(block, type)).Prepend(LiteralTranslation).Prepend(PrimaryTranslation).ToArray();
 
     public static bool Applies(VocabularyItemType type, EntryBlock block) => For(type).Any(s => s.Block == block);
 

@@ -13,7 +13,10 @@ internal static class SpeechPlaybackButton
     public static Button Create(Func<Action, Button> build, Func<SpeechPlayback, Task> speak, SpeechPlayback? playback = null)
     {
         playback ??= new SpeechPlayback();
-        var button = build(() => _ = speak(playback));
+        var button = build(() =>
+        {
+            if (playback.State != SpeechPlaybackState.Preparing) _ = speak(playback);
+        });
         var icon = button.Content as MdiIcon ?? ((Panel)button.Content!).Children.OfType<MdiIcon>().Single();
         var restIcon = icon.IconName;
         var frame = 0;
@@ -22,12 +25,16 @@ internal static class SpeechPlaybackButton
         button.Classes.Add("speech");
         icon.ClearValue(MdiIcon.ForegroundProperty);
 
-        void SetPlaying(bool playing)
+        var displayed = SpeechPlaybackState.Idle;
+        void ShowState(SpeechPlaybackState state)
         {
-            if (button.Classes.Contains("playing") == playing) return;
-            button.Classes.Set("playing", playing);
-            AutomationProperties.SetItemStatus(button, playing ? "正在播放" : "");
-            if (playing)
+            if (displayed == state) return;
+            displayed = state;
+            button.Classes.Set("preparing", state == SpeechPlaybackState.Preparing);
+            button.Classes.Set("playing", state == SpeechPlaybackState.Playing);
+            AutomationProperties.SetItemStatus(button, state switch
+                { SpeechPlaybackState.Preparing => "正在准备语音", SpeechPlaybackState.Playing => "正在播放", _ => "" });
+            if (state == SpeechPlaybackState.Playing)
             {
                 frame = 0;
                 icon.IconName = Waves[frame];
@@ -36,12 +43,16 @@ internal static class SpeechPlaybackButton
             else
             {
                 timer.Stop();
-                icon.IconName = restIcon;
+                icon.IconName = state == SpeechPlaybackState.Preparing ? "timer-sand" : restIcon;
             }
         }
 
-        void Refresh() => SetPlaying(playback.IsPlaying && button.IsAttachedToVisualTree());
-        void Changed(object? sender, EventArgs e) => Dispatcher.UIThread.Post(Refresh);
+        void Refresh() => ShowState(button.IsAttachedToVisualTree() ? playback.State : SpeechPlaybackState.Idle);
+        void Changed(object? sender, EventArgs e)
+        {
+            if (Dispatcher.UIThread.CheckAccess()) Refresh();
+            else Dispatcher.UIThread.Post(Refresh);
+        }
         button.AttachedToVisualTree += (_, _) =>
         {
             playback.Changed += Changed;
@@ -50,7 +61,7 @@ internal static class SpeechPlaybackButton
         button.DetachedFromVisualTree += (_, _) =>
         {
             playback.Changed -= Changed;
-            SetPlaying(false);
+            ShowState(SpeechPlaybackState.Idle);
         };
         return button;
     }

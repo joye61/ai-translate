@@ -123,7 +123,8 @@ public sealed class DictionaryStudioView : UserControl
         RunLookupAsync(query, contextSentence, source, sourceTitle, targetLanguage);
 
     private async Task RunLookupAsync(string query, string? contextSentence, TranslationTriggerSource source, string sourceTitle,
-        string? language, DictionaryEntryResult? refreshing = null, bool linked = false, bool cacheOnly = false)
+        string? language, DictionaryEntryResult? refreshing = null, bool linked = false, bool cacheOnly = false,
+        DictionaryEntryResult? fallback = null)
     {
         query = DictionaryQuery.CleanInput(query);
         if (query.Length == 0) return;
@@ -133,6 +134,7 @@ public sealed class DictionaryStudioView : UserControl
         using var request = new CancellationTokenSource();
         _lookup = request;
         var page = BeginResult(query, language, contextSentence);
+        if (fallback is not null) page.ShowEntry(fallback, complete: false);
         _composer.SetActivity(ComposerActivity.Translating);
         _setStatus("正在翻译…");
         try
@@ -152,10 +154,10 @@ public sealed class DictionaryStudioView : UserControl
         {
             if (_lookup == request)
             {
-                if (refreshing is not null)
+                if ((refreshing ?? fallback) is { } previous)
                 {
                     page = BeginResult(query, language, contextSentence);
-                    FinishResult(page, refreshing, contextSentence, source, sourceTitle, pronounce: false);
+                    FinishResult(page, previous, contextSentence, source, sourceTitle, pronounce: false);
                     _setStatus($"刷新失败，已保留原结果。{ex.Message}");
                 }
                 else
@@ -175,6 +177,14 @@ public sealed class DictionaryStudioView : UserControl
                 _composer.SetActivity(ComposerActivity.Ready);
             }
         }
+    }
+
+    public Task OpenDetailsAsync(DictionaryEntryResult result, TranslationTriggerSource source, string sourceTitle)
+    {
+        if (result.Processing?.Intent == DictionaryLookupIntent.Quick)
+            return RunLookupAsync(result.SourceText, result.LookupContext, source, sourceTitle, result.TargetLanguage, fallback: result);
+        DisplayResult(result, source, sourceTitle);
+        return Task.CompletedTask;
     }
 
     public void DisplayResult(DictionaryEntryResult result, TranslationTriggerSource source, string sourceTitle)
@@ -284,6 +294,16 @@ public sealed class DictionaryStudioView : UserControl
         tools.Children.Add(StudioUi.CreateIconButton("refresh", "重新用 AI 翻译（忽略缓存）",
             () => _ = RunLookupAsync(result.SourceText, contextSentence, source, sourceTitle, result.TargetLanguage, result)));
         var extras = new WrapPanel { ItemSpacing = AppTheme.Space.XXS, LineSpacing = AppTheme.Space.XXS, HorizontalAlignment = HorizontalAlignment.Right };
+        var currentReading = _current;
+        var resumeExtension = result.Processing?.CanResumeExtension == true;
+        if (result.Processing?.Review is not (DictionaryStageState.Completed or DictionaryStageState.Unresolved) || resumeExtension)
+        {
+            var label = resumeExtension ? "补全并核对" : "核对整条";
+            var review = StudioUi.CreateCompactButton("sparkles", label,
+                () => _ = SupplementAsync(page, currentReading, wholeEntry: true));
+            ToolTip.SetTip(review, resumeExtension ? "继续补全学习解析，再核对主译与各栏内容是否一致" : "核对主译与各栏内容是否一致");
+            extras.Children.Add(review);
+        }
         if (!result.ItemType.IsPassage())
         {
             var reading = _current;
@@ -292,42 +312,50 @@ public sealed class DictionaryStudioView : UserControl
             {
                 var fill = StudioUi.CreateCompactButton("format-quote-close", $"补全例句 · {missing}",
                     () => _ = SupplementAsync(page, reading));
-                ToolTip.SetTip(fill, "只为缺双语例句的句型和搭配补例句，每次最多八处");
+                ToolTip.SetTip(fill, "为所有缺双语例句的句型和搭配补充例句");
                 extras.Children.Add(fill);
             }
         }
         page.ShowActions(tools, extras);
-        _setStatus(result.NotebookSyncPending ? BlockReviewActions.PendingSyncStatus : "翻译完成");
+        _setStatus(result.NotebookSyncPending ? BlockReviewActions.PendingSyncStatus :
+            DictionaryResultView.QualityStatus(result) ?? "翻译完成");
         if (pronounce && _settings.Current.AutoPronounceOnLookup && accent is { } autoVoice)
             _ = _speech.SpeakAsync(result.SourceText, autoVoice, result.UsPhonetic, _settings.Current.SpeechSpeed,
                 autoVoice == SpeechAccent.AmericanEnglish ? _settings.Current.PreferredUsVoiceId : null, playback: page.SourcePlayback);
     }
 
-    private async Task SupplementAsync(DictionaryResultView page, Reading reading, EntryBlock? block = null)
+    private async Task SupplementAsync(DictionaryResultView page, Reading reading, EntryBlock? block = null, bool wholeEntry = false)
     {
-        if (_lookup is not null || !ReferenceEquals(_current, reading)) return;
+        if (_lookup is not null || page.BlockReviews.IsBusy || !ReferenceEquals(_current, reading)) return;
         using var request = new CancellationTokenSource();
         _lookup = request;
-        _composer.SetActivity(block is null ? ComposerActivity.Translating : ComposerActivity.ReviewingBlock);
         var title = EntryBlockCatalog.For(reading.Entry.ItemType).FirstOrDefault(s => s.Block == block)?.Title;
+        var progress = wholeEntry
+            ? reading.Entry.Processing?.CanResumeExtension == true ? "正在补全并核对词条…" : "正在核对整条…"
+            : block is null ? "正在补全双语例句…" : $"正在复核「{title}」…";
+        _composer.SetActivity(block is null && !wholeEntry ? ComposerActivity.Translating : ComposerActivity.Reviewing, progress);
+        page.EnableSupplementActions(false);
         if (block is null) page.BlockReviews.SetBusy(true);
-        _setStatus(block is null ? "正在补全双语例句…" : $"AI 正在复核「{title}」…");
+        _setStatus(progress);
         try
         {
-            var result = block is { } target
+            var result = wholeEntry ? await _dictionaryService.ReviewEntryAsync(reading.Entry, request.Token)
+                : block is { } target
                 ? await page.BlockReviews.ReviewAsync(_dictionaryService, reading.Entry, target, request.Token)
                 : await _dictionaryService.CompleteExamplesAsync(reading.Entry, reading.Context, request.Token);
             if (_lookup != request) return;
             if (ReferenceEquals(result, reading.Entry))
             {
-                _setStatus(block is null ? "本轮未发现可补充的例句" : BlockReviewActions.ResultStatus(title!, result, changed: false));
+                _setStatus(wholeEntry ? DictionaryResultView.QualityStatus(result) ?? "当前版本已核对" :
+                    block is null ? "本轮未发现可补充的例句" : BlockReviewActions.ResultStatus(title!, result, changed: false));
                 return;
             }
             var offset = _scroll.Offset;
             FinishResult(page, result, reading.Context, reading.Source, reading.Title, pronounce: false);
             _scroll.UpdateLayout();
             _scroll.Offset = offset;
-            _setStatus(block is not null ? BlockReviewActions.ResultStatus(title!, result, changed: true) :
+            if (wholeEntry) return;
+            _setStatus(block is not null ? BlockReviewActions.ResultStatus(title!, result, BlockReviewActions.SectionChanged(reading.Entry, result, block.Value)) :
                 result.NotebookSyncPending ? BlockReviewActions.PendingSyncStatus :
                 $"已补全 {reading.Entry.MissingUsageExamples().Count() - result.MissingUsageExamples().Count()} 处双语例句");
         }
@@ -336,11 +364,12 @@ public sealed class DictionaryStudioView : UserControl
         {
             if (_lookup == request)
             {
-                _setStatus($"未能完成{(block is null ? "例句补全" : $"「{title}」复核")}。{ex.Message}");
+                _setStatus($"未能完成{(wholeEntry ? "整条核对" : block is null ? "例句补全" : $"「{title}」复核")}。{ex.Message}");
             }
         }
         finally
         {
+            page.EnableSupplementActions(true);
             if (block is null) page.BlockReviews.SetBusy(false);
             if (_lookup == request)
             {

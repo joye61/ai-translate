@@ -3,6 +3,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 
 namespace AiTranslate.Desktop.Controls;
@@ -12,6 +13,8 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
 {
     private sealed record Mark(int Start, int End, string? Term, string? GrammarNote = null);
     private const string SelectionHint = "选中文字后右键查词";
+    private static readonly AttachedProperty<Action<string, string>?> SelectionLookupProperty =
+        AvaloniaProperty.RegisterAttached<DictionaryReadingText, Control, Action<string, string>?>("SelectionLookup", inherits: true);
     private static readonly Cursor TextCursor = Cursor.Parse("IBeam");
     private static readonly Cursor LinkCursor = Cursor.Parse("Hand");
     private readonly List<Mark> _marks = [];
@@ -19,6 +22,9 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
     private readonly string _original;
     private readonly bool _standaloneTerms;
     private Mark? _pressed;
+
+    static DictionaryReadingText() => ContextRequestedEvent.AddClassHandler<SelectableTextBlock>(
+        QuerySelection, RoutingStrategies.Tunnel);
 
     public bool HasLinkedTerms => _marks.Any(mark => mark.Term is not null);
     // TextDecoration belongs to the creating UI dispatcher.
@@ -37,8 +43,12 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
     internal static DictionaryReadingText Primary(DictionaryEntryResult entry, Action<string, string> lookup)
     {
         var text = entry.PrimaryTranslation;
-        if (entry.ItemType.IsPassage())
-            return Passage(text, lookup, entry.Collocations.Concat(entry.GlossaryReferences).Select(c => c.Meaning));
+        // A provider may classify a long definition as a phrase. Keep prose selectable and
+        // underline individual expressions instead of making a whole sentence one link.
+        if (entry.ItemType.IsPassage() || DictionaryQuery.SuggestType(entry.SourceText).IsPassage() &&
+            DictionaryQuery.SuggestType(text).IsPassage() && entry.PrimaryRenderings().Take(2).Count() == 1)
+            return Passage(text, lookup, entry.Collocations.Concat(entry.GlossaryReferences).Select(c => c.Meaning)
+                .Concat(entry.TranslationOptions.Select(o => o.Text)));
         var terms = entry.TranslationOptions.Select(o => o.Text).Concat(entry.PrimaryRenderings());
         return TextStyles.Apply(new DictionaryReadingText(text, lookup, terms, standaloneTerms: true), TextRole.Translation);
     }
@@ -109,23 +119,26 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
         EnableSelectionLookup(this, lookup);
     }
 
-    public static void EnableSelectionLookup(SelectableTextBlock block, Action<string, string> lookup)
+    // Plain reading text inherits the page lookup. A source or translation can supply its own direction.
+    public static void EnableSelectionLookup(Control scope, Action<string, string> lookup) =>
+        scope.SetValue(SelectionLookupProperty, lookup);
+
+    private static void QuerySelection(SelectableTextBlock block, ContextRequestedEventArgs e)
     {
-        var find = new MenuItem { Header = "查询选中文本", [!IsEnabledProperty] = block[!CanCopyProperty] };
-        find.Click += (_, _) =>
+        if (block.GetValue(SelectionLookupProperty) is not { } lookup) return;
+        e.Handled = true;
+        var selected = block.SelectedText;
+        var query = DictionaryQuery.CleanInput(selected);
+        if (query.Length == 0) return;
+        var start = Math.Min(block.SelectionStart, block.SelectionEnd);
+        var text = block.Text ?? block.Inlines?.Text ?? "";
+        if (e.TryGetPosition(block, out var point))
         {
-            var selected = block.SelectedText;
-            var query = DictionaryQuery.CleanInput(selected);
-            if (query.Length == 0) return;
-            var text = block.Text ?? block.Inlines?.Text ?? "";
-            lookup(query, SentenceAt(text, Math.Min(block.SelectionStart, block.SelectionEnd), selected.Length));
-        };
-        var copy = new MenuItem { Header = "复制", [!IsEnabledProperty] = block[!CanCopyProperty] };
-        copy.Click += (_, _) => block.Copy();
-        var select = new MenuItem { Header = "全选" };
-        select.Click += (_, _) => block.SelectAll();
-        block.ContextMenu = new ContextMenu { Items = { find, copy, select } };
-        ToolTip.SetTip(block, SelectionHint);
+            var index = HitIndex(block, point, text.Length);
+            if (index < start || index >= start + selected.Length ||
+                block is DictionaryReadingText reader && reader.TermAt(index) is not null) return;
+        }
+        lookup(query, SentenceAt(text, start, selected.Length));
     }
 
     internal static string SentenceAt(string text, int index, int length)
@@ -140,15 +153,17 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
         return text[left..right].Trim();
     }
 
-    private int HitIndex(PointerEventArgs e)
+    private int HitIndex(PointerEventArgs e) => HitIndex(this, e.GetPosition(this), _original.Length);
+
+    private static int HitIndex(SelectableTextBlock block, Point point, int length)
     {
-        var point = e.GetPosition(this) - new Point(Padding.Left, Padding.Top);
-        var layout = TextLayout;
+        point -= new Point(block.Padding.Left, block.Padding.Top);
+        var layout = block.TextLayout;
         var hit = layout.HitTestPoint(point);
         var index = hit.CharacterHit.FirstCharacterIndex;
         // On wrapped lines Avalonia can return the right character with IsInside == false.
         // Verify its layout bounds so blank space past the line still does nothing.
-        if (index < 0 || index >= _original.Length) return -1;
+        if (index < 0 || index >= length) return -1;
         return hit.IsInside || layout.HitTestTextRange(index, 1).Any(bounds => bounds.Contains(point)) ? index : -1;
     }
 

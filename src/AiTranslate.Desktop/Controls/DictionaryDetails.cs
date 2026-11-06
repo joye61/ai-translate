@@ -17,8 +17,8 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
 {
     private sealed record Row(string Label, string Text, string? Note = null, BilingualExample? Example = null, bool Link = false,
         UsageContrast? Contrast = null, PartOfSpeechSense? Sense = null, int Number = 0, bool Chips = false, SenseHeading? Heading = null,
-        WordInflection? SenseForm = null, string? UsageNote = null);
-    private enum Layout { Columns, Stacked, Forms, Senses }
+        WordInflection? SenseForm = null, string? UsageNote = null, UsageGuidance? Guidance = null);
+    private enum Layout { Columns, Forms, Senses }
     private readonly DictionaryDisclosures _disclosures = disclosures ?? new();
     private const string ChipSeparator = "  ·  ";
     private sealed class SectionState
@@ -70,6 +70,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
         var passage = entry.ItemType.IsPassage();
         switch (spec.Block)
         {
+            case EntryBlock.PrimaryTranslation:
             case EntryBlock.LiteralTranslation:
                 // DictionaryTranslations presents both readings together above the details.
                 break;
@@ -78,18 +79,13 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                     () => WithNote(SourceText(entry.SourceText), entry.SourceReadingNote));
                 break;
             case EntryBlock.PronunciationPractice:
-                Custom(spec, new { entry.SourceText, entry.UsPhonetic, entry.UkPhonetic, entry.PronunciationTip,
-                    Example = entry.Examples.FirstOrDefault()?.SourceSentence }, () =>
-                {
-                    if (_finished is null || !PhonicsAudioBar.HasEnglishAudio(entry)) return null;
-                    var practice = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S };
-                    PhonicsAudioBar.AddPracticeButtons(practice, speech, settings, entry.SourceText, entry.UsPhonetic,
-                        entry.UkPhonetic, entry.Examples.FirstOrDefault()?.SourceSentence);
-                    return WithNote(practice, entry.PronunciationTip);
-                });
+                Custom(spec, new { entry.SourceText, entry.DetectedSourceLanguage, entry.UsPhonetic, entry.UkPhonetic,
+                    entry.PronunciationTip, entry.PronunciationDrills, Example = entry.Examples.FirstOrDefault()?.SourceSentence },
+                    () => CreatePronunciationPractice(entry));
                 break;
             case EntryBlock.Alignment:
-                Custom(spec, new { entry.Alignment, SourceAnnotations }, () => DictionaryInsightBlocks.Alignment(entry.Alignment, SourceText));
+                Custom(spec, new { entry.Alignment, SourceAnnotations }, () => DictionaryInsightBlocks.Alignment(entry.Alignment, SourceText,
+                    _finished is null ? null : LookupTargetText));
                 break;
             case EntryBlock.KeyPoints:
                 Custom(spec, entry.KeyPoints, () => DictionaryInsightBlocks.KeyPoints(entry.KeyPoints));
@@ -136,14 +132,10 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 if (EntryBlockCatalog.Applies(entry.ItemType, EntryBlock.WordFamily))
                     attached.UnionWith(entry.WordFamily.Select(f => f.Example?.SourceSentence).OfType<string>());
                 var extra = entry.Examples.Where(e => !attached.Contains(e.SourceSentence)).ToArray();
-                // Sense hints label the examples when present; otherwise they share the ordinal badge used by every numbered list.
-                var hinted = extra.Any(e => !string.IsNullOrWhiteSpace(e.SenseHint));
-                Section(spec, extra.Select((e, i) => hinted
-                    ? new Row(string.IsNullOrWhiteSpace(e.SenseHint) ? $"{i + 1:D2}" : e.SenseHint, "", Example: e)
-                    : new Row("", "", Example: e, Number: i + 1)), unit: "句");
+                Section(spec, extra.Select((e, i) => new Row(e.SenseHint ?? "", "", Example: e, Number: i + 1)), unit: "句");
                 break;
             case EntryBlock.UsageContrasts:
-                Section(spec, entry.UsageContrasts.Select(c => new Row("", "", Contrast: c)));
+                Section(spec, entry.UsageContrasts.Select(c => new Row("", "", Contrast: c)), unit: "组");
                 break;
             case EntryBlock.SynonymNuances:
                 Custom(spec, entry.SynonymNuances, () => DictionaryInsightBlocks.Synonyms(entry.SynonymNuances, entry.SourceText,
@@ -153,16 +145,21 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 Custom(spec, entry.Mistakes, () => DictionaryInsightBlocks.Mistakes(entry.Mistakes));
                 break;
             case EntryBlock.UsageNotes:
-                Section(spec, passage
+                var legacyNotes = passage
                     ? Notes(("句式", entry.GrammarBreakdown), ("用法", entry.UsageNotes), ("语境", entry.ContextMeaning))
                     : Notes(("使用提示", entry.UsageNotes), ("近义辨析", entry.SynonymNuances.Count > 0 ? null : entry.WordChoice),
-                        ("易错用法", entry.Mistakes.Count > 0 ? null : entry.CommonMistakes), ("语法", entry.GrammarBreakdown)));
+                        ("易错用法", entry.Mistakes.Count > 0 ? null : entry.CommonMistakes), ("语法", entry.GrammarBreakdown));
+                Section(spec, entry.UsageGuidance.Select((g, i) => new Row(g.Title, g.Explanation,
+                    Example: g.Example, Number: i + 1, Guidance: g)).Concat(legacyNotes), unit: "条");
                 break;
             case EntryBlock.Tone:
-                Custom(spec, entry.Tone, () => DictionaryInsightBlocks.Tone(entry.Tone));
+                Custom(spec, new { entry.Tone, entry.ToneEvidence }, () => DictionaryInsightBlocks.Combine(
+                    DictionaryInsightBlocks.Tone(entry.Tone), DictionaryInsightBlocks.ToneEvidence(entry.ToneEvidence)));
                 break;
             case EntryBlock.Culture:
-                Custom(spec, entry.CulturalNote, () => DictionaryInsightBlocks.Note(entry.CulturalNote, "earth", RichBlocks.CalloutTone.Neutral));
+                Custom(spec, new { entry.CulturalNote, entry.CulturalNotes }, () => DictionaryInsightBlocks.Combine(
+                    DictionaryInsightBlocks.Note(entry.CulturalNote, "earth", RichBlocks.CalloutTone.Neutral),
+                    DictionaryInsightBlocks.Explanations(entry.CulturalNotes, cultural: true)));
                 break;
             case EntryBlock.Thesaurus:
                 // Words already compared in the nuance table are not repeated as bare chips.
@@ -177,11 +174,14 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 Custom(spec, related, () => CreateRelatedTable(related));
                 break;
             case EntryBlock.WordFormation:
-                Custom(spec, new { entry.Morphemes, entry.EtymologyAndRoot },
-                    () => DictionaryInsightBlocks.WordFormation(entry.Morphemes, entry.EtymologyAndRoot, entry.SourceText));
+                Custom(spec, new { entry.Morphemes, entry.EtymologyAndRoot, entry.EtymologyNotes },
+                    () => DictionaryInsightBlocks.Combine(DictionaryInsightBlocks.WordFormation(entry.Morphemes, entry.EtymologyAndRoot, entry.SourceText),
+                        DictionaryInsightBlocks.Explanations(entry.EtymologyNotes)));
                 break;
             case EntryBlock.Mnemonic:
-                Custom(spec, entry.MemoryMnemonic, () => DictionaryInsightBlocks.Note(entry.MemoryMnemonic, "lightbulb-on-outline", RichBlocks.CalloutTone.Attention));
+                Custom(spec, new { entry.MemoryMnemonic, entry.Mnemonics }, () => DictionaryInsightBlocks.Combine(
+                    DictionaryInsightBlocks.Note(entry.MemoryMnemonic, "lightbulb-on-outline", RichBlocks.CalloutTone.Attention),
+                    DictionaryInsightBlocks.Mnemonics(entry.Mnemonics)));
                 break;
             case EntryBlock.Tags:
                 Section(spec, entry.SuggestedTags.Count == 0 ? [] : [new Row("", string.Join(ChipSeparator, entry.SuggestedTags), Chips: true)]);
@@ -191,9 +191,12 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 Custom(spec, new { terms, entry.GlossaryUsageNote }, () =>
                 {
                     if (terms.Length == 0) return null;
-                    var list = new StackPanel { Spacing = AppTheme.Space.M };
-                    foreach (var term in terms) list.Children.Add(CreateRow(term, Layout.Stacked, true));
-                    return WithNote(list, entry.GlossaryUsageNote);
+                    var glossary = RichBlocks.Table("*,2*", ["收录表达", "词义"], terms.Select(term => (IReadOnlyList<Control>)
+                    [
+                        _finished is null ? TextStyles.Selectable(term.Label, TextRole.Term) : TermButton(term),
+                        TextStyles.Selectable(term.Text, TextRole.Body)
+                    ]).ToArray());
+                    return WithNote(glossary, entry.GlossaryUsageNote);
                 });
                 break;
         }
@@ -270,7 +273,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
     {
         var section = Ensure(spec);
         var rows = values.ToArray();
-        var interactive = _finished is not null && rows.Any(r => r.Link || r.Example is not null);
+        var interactive = _finished is not null && rows.Any(r => r.Link || r.Example is not null || r.Contrast is not null);
         section.Host.IsVisible = rows.Length > 0;
         if (section.Items is not null && section.Rows.SequenceEqual(rows) && section.Interactive == interactive) return;
         if (section.Items is null)
@@ -279,7 +282,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
             {
                 Layout.Forms => new WrapPanel { ItemSpacing = AppTheme.Space.XXL, LineSpacing = AppTheme.Space.S },
                 Layout.Senses => new StackPanel(),
-                _ => new StackPanel { Spacing = layout == Layout.Stacked ? AppTheme.Space.M + 2 : AppTheme.Space.L }
+                _ => new StackPanel { Spacing = AppTheme.Space.L }
             };
             Grid.SetIsSharedSizeScope(section.Items, true);
             section.Body.Content = layout == Layout.Senses
@@ -318,7 +321,8 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
 
     private Control CreateRow(Row row, Layout layout, bool hasLabels)
     {
-        if (row.Contrast is { } contrast) return UsageContrastView.Create(contrast);
+        if (row.Contrast is { } contrast) return UsageContrastView.Create(contrast, AddExample);
+        if (row.Guidance is { } guidance) return CreateUsageGuidance(guidance, row.Number);
         if (row.Heading is { } heading) return CreateSenseHeading(heading);
         if (row.Sense is { } sense) return CreateSenseRow(row, sense);
         if (layout == Layout.Senses)
@@ -331,10 +335,10 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
         }
         if (layout == Layout.Forms) return CreateForm(row.Label, row.Text);
         if (row.Chips) return hasLabels ? StudioUi.CreateKeyValue(row.Label, CreateChips(row), "RowLabel", labelTop: row.Link ? 5 : 2) : CreateChips(row);
-        if (row.Number > 0 && row.Example is { } numbered && string.IsNullOrEmpty(row.Label))
+        if (row.Number > 0 && row.Example is { } numbered)
         {
             var tile = new StackPanel();
-            AddExample(tile, numbered);
+            AddExample(tile, numbered, row.Label);
             var ordinal = StudioUi.CreateOrdinal(row.Number);
             // Centre the 22px badge on the tile's first 22px text line (tile padding top = Space.S).
             ordinal.Margin = new Thickness(0, AppTheme.Space.S, AppTheme.Space.M, 0);
@@ -342,33 +346,14 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
             Grid.SetColumn(tile, 1);
             return numberedRow;
         }
-        var stacked = layout == Layout.Stacked;
         var body = new StackPanel { Spacing = AppTheme.Space.XXS };
-        if (stacked)
-        {
-            // Expression and meaning share a line when they fit; long ones wrap naturally instead of always stacking.
-            var head = new WrapPanel { ItemSpacing = AppTheme.Space.M, LineSpacing = 2 };
-            Control term = _finished is not null && row.Link ? TermButton(row) : TextStyles.Selectable(row.Label, TextRole.Term);
-            term.VerticalAlignment = VerticalAlignment.Center;
-            head.Children.Add(term);
-            if (!string.IsNullOrWhiteSpace(row.Text))
-            {
-                // A bare part-of-speech label (词族: serendipitous 形容词) reads better as a tinted tag.
-                Control meaning = HueMap.PartOfSpeech(row.Text) is var hue && !ReferenceEquals(hue, AppTheme.Hues.Neutral)
-                    ? StudioUi.CreateTag(row.Text, TextRole.Label, hue)
-                    : TextStyles.Selectable(row.Text, TextRole.Body);
-                meaning.VerticalAlignment = VerticalAlignment.Center;
-                head.Children.Add(meaning);
-            }
-            body.Children.Add(head);
-        }
-        else if (!string.IsNullOrWhiteSpace(row.Text)) body.Children.Add(RichText.Create(row.Text, TextRole.Body));
+        if (!string.IsNullOrWhiteSpace(row.Text)) body.Children.Add(RichText.Create(row.Text, TextRole.Body));
         if (!string.IsNullOrWhiteSpace(row.Note)) body.Children.Add(NoteBlock(row.Note));
         if (row.Example is { } example) AddExample(body, example);
-        return stacked || !hasLabels ? body : StudioUi.CreateKeyValue(row.Label, body, "RowLabel");
+        return hasLabels ? StudioUi.CreateKeyValue(row.Label, body, "RowLabel") : body;
     }
 
-    private static Border Pill(string text, TextRole role) => StudioUi.CreateTag(text, role);
+    private static Border Pill(string text, TextRole role) => StudioUi.CreateTag(text, role, wrap: true);
 
     private WrapPanel CreateChips(Row row)
     {
@@ -384,7 +369,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
             {
                 Classes = { "ghost" }, Background = AppTheme.CardBg, BorderBrush = AppTheme.BorderStrong, BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(AppTheme.Radius.Pill), Padding = new Thickness(AppTheme.Space.M - 2, 3),
-                Content = TextStyles.Create(word, TextRole.Body, wrap: false)
+                Content = TextStyles.Create(word, TextRole.Body)
             };
             AutomationProperties.SetName(chip, $"查词 {word}");
             ToolTip.SetTip(chip, $"查询 “{word}”");

@@ -121,6 +121,27 @@ internal static class RichBlocks
         };
     }
 
+    // A single reading surface with fine rules between entries. Keep the first and last
+    // entry flush with the section when a frame would repeat the surrounding container.
+    public static Control RuledRows(IEnumerable<Control> entries, bool framed = false)
+    {
+        var rows = new StackPanel();
+        var inset = framed ? AppTheme.Space.M : 0;
+        foreach (var entry in entries)
+        {
+            var first = rows.Children.Count == 0;
+            rows.Children.Add(new Border
+            {
+                BorderBrush = AppTheme.BorderSubtle, BorderThickness = new Thickness(0, first ? 0 : 1, 0, 0),
+                Padding = new Thickness(inset, first && !framed ? 0 : AppTheme.Space.M, inset, AppTheme.Space.M),
+                Child = entry
+            });
+        }
+        if (!framed && rows.Children.LastOrDefault() is Border last)
+            last.Padding = new Thickness(0, last.Padding.Top, 0, 0);
+        return framed ? TableFrame(rows) : rows;
+    }
+
     /// <summary>Soft tinted note with a leading icon. Attention uses amber (memory aids, cautions), Insight the AI accent.</summary>
     public static Control Callout(string icon, Control content, CalloutTone tone = CalloutTone.Neutral)
     {
@@ -144,24 +165,63 @@ internal static class RichBlocks
         };
     }
 
-    /// <summary>Indented outline. Nested levels hang off a hairline guide so hierarchy reads at a glance.</summary>
+    /// <summary>Inset for quoted text, with an optional playback action.</summary>
+    public static Border Quote(Control content, Control? action = null)
+    {
+        var mark = new MdiIcon("format-quote-open", 16, AppTheme.TextMuted)
+        {
+            VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 3, 0, 0)
+        };
+        var grid = new QuoteGrid(mark, content, action)
+        {
+            ColumnDefinitions = new ColumnDefinitions(action is null ? "Auto,*" : "Auto,*,Auto"),
+            ColumnSpacing = AppTheme.Space.S, Children = { mark, content }
+        };
+        Grid.SetColumn(content, 1);
+        if (action is not null)
+        {
+            grid.RowDefinitions = new RowDefinitions("Auto,Auto");
+            action.HorizontalAlignment = HorizontalAlignment.Right;
+            action.VerticalAlignment = VerticalAlignment.Top;
+            Grid.SetColumn(action, 2);
+            grid.Children.Add(action);
+        }
+        return new Border
+        {
+            Background = AppTheme.InputBg, CornerRadius = new CornerRadius(AppTheme.Radius.M),
+            Padding = new Thickness(AppTheme.Space.M, AppTheme.Space.S), Child = grid
+        };
+    }
+
+    private sealed class QuoteGrid(Control mark, Control content, Control? action) : Grid
+    {
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            if (action is not null)
+            {
+                mark.Measure(Size.Infinity);
+                content.Measure(Size.Infinity);
+                action.Measure(Size.Infinity);
+                var inlineWidth = mark.DesiredSize.Width + content.DesiredSize.Width + action.DesiredSize.Width + 2 * ColumnSpacing;
+                var below = availableSize.Width < 520 && inlineWidth > availableSize.Width;
+                SetColumnSpan(content, below ? 2 : 1);
+                SetColumn(action, below ? 1 : 2);
+                SetRow(action, below ? 1 : 0);
+                SetColumnSpan(action, below ? 2 : 1);
+                action.Margin = below ? new Thickness(0, AppTheme.Space.XXS, 0, 0) : default;
+            }
+            return base.MeasureOverride(availableSize);
+        }
+    }
+
+    /// <summary>Indent the entire clause row so wrapped text stays at its own level.</summary>
     public static Control Tree(IEnumerable<(int Depth, Control Content)> nodes)
     {
-        const double indent = 22;
         var tree = new StackPanel { Spacing = AppTheme.Space.S };
         foreach (var (depth, content) in nodes)
         {
-            if (depth <= 0)
-            {
-                tree.Children.Add(content);
-                continue;
-            }
-            tree.Children.Add(new Border
-            {
-                Margin = new Thickness((depth - 1) * indent + 7, 0, 0, 0),
-                BorderBrush = AppTheme.BorderStrong, BorderThickness = new Thickness(1.5, 0, 0, 0),
-                Padding = new Thickness(indent - 8, 1, 0, 1), Child = content
-            });
+            content.Margin += new Thickness(Math.Max(0, depth) * AppTheme.Space.XL, 0, 0, 0);
+            tree.Children.Add(content);
         }
         return tree;
     }

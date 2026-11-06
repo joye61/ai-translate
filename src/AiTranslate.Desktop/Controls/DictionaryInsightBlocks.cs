@@ -9,7 +9,7 @@ using Avalonia.Threading;
 namespace AiTranslate.Desktop.Controls;
 
 /// <summary>Visual forms for the AI-judged structured blocks of a dictionary result. Each method returns null when empty.</summary>
-internal static class DictionaryInsightBlocks
+internal static partial class DictionaryInsightBlocks
 {
     private static Control TargetText(string text, TextRole role, bool passage, Action<string, string>? lookup)
     {
@@ -40,38 +40,25 @@ internal static class DictionaryInsightBlocks
     public static Control? Variants(IReadOnlyList<TranslationVariant> variants, bool passage, Action<string>? copy, Action<string, string>? lookup)
     {
         if (variants.Count == 0) return null;
-        var list = new StackPanel { Spacing = AppTheme.Space.M + 2 };
-        Grid.SetIsSharedSizeScope(list, true);
-        foreach (var variant in variants)
+        return RichBlocks.RuledRows(variants.Select(variant =>
         {
-            var tag = StudioUi.CreateTag(variant.Style, TextRole.Label, AppTheme.Hues.Violet);
-            tag.VerticalAlignment = VerticalAlignment.Top;
-            tag.Margin = new Thickness(0, passage ? 3 : 1, 0, 0);
-            var role = passage ? TextRole.PassageTranslation : TextRole.Definition;
-            var body = new StackPanel { Spacing = AppTheme.Space.XS, Children = { TargetText(variant.Text, role, passage, lookup) } };
-            if (!string.IsNullOrWhiteSpace(variant.Note))
-                body.Children.Add(RichBlocks.Annotation("选用说明", RichText.Create(variant.Note, TextRole.Annotation)));
-            var row = new Grid
-            {
-                ColumnDefinitions =
-                {
-                    new ColumnDefinition(GridLength.Auto) { SharedSizeGroup = "VariantStyle" },
-                    new ColumnDefinition(GridLength.Star),
-                    new ColumnDefinition(GridLength.Auto)
-                },
-                ColumnSpacing = AppTheme.Space.M,
-                Children = { tag, body }
-            };
-            Grid.SetColumn(body, 1);
+            var tag = StudioUi.CreateTag(variant.Style, TextRole.Label, AppTheme.Hues.Violet, wrap: true);
+            var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = AppTheme.Space.S };
+            if (!string.IsNullOrWhiteSpace(variant.Style)) header.Children.Add(tag);
             if (copy is not null)
             {
                 var button = CopyButton(() => copy(variant.Text));
-                Grid.SetColumn(button, 2);
-                row.Children.Add(button);
+                Grid.SetColumn(button, 1);
+                header.Children.Add(button);
             }
-            list.Children.Add(row);
-        }
-        return list;
+            var role = passage ? TextRole.PassageTranslation : TextRole.Definition;
+            var body = new StackPanel { Spacing = AppTheme.Space.XS };
+            if (header.Children.Count > 0) body.Children.Add(header);
+            body.Children.Add(TargetText(variant.Text, role, passage, lookup));
+            if (!string.IsNullOrWhiteSpace(variant.Note))
+                body.Children.Add(StudioUi.CreateKeyValue("选用说明", RichText.Create(variant.Note, TextRole.Annotation)));
+            return body;
+        }), framed: true);
     }
 
     public static Control? KeyPoints(IReadOnlyList<string> points) =>
@@ -88,10 +75,20 @@ internal static class DictionaryInsightBlocks
         {
             var anchors = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = 2 };
             anchors.Children.Add(Centered(TextStyles.Selectable(d.SourceQuote, TextRole.ExampleSource)));
-            anchors.Children.Add(new MdiIcon("arrow-right", 14, AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Center });
-            anchors.Children.Add(lookup is null ? Centered(TextStyles.Selectable(d.TargetQuote, TextRole.Term))
-                : LinkText(d.TargetQuote, () => lookup(d.TargetQuote)));
-            var item = new StackPanel { Spacing = AppTheme.Space.XXS, Children = { anchors, RichText.Create(d.Reason, TextRole.Secondary) } };
+            if (!string.IsNullOrWhiteSpace(d.TargetQuote))
+            {
+                Control target = lookup is null ? TextStyles.Selectable(d.TargetQuote, TextRole.Term)
+                    : LinkText(d.TargetQuote, () => lookup(d.TargetQuote));
+                Grid.SetColumn(target, 1);
+                anchors.Children.Add(new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = AppTheme.Space.S,
+                    Children = { new MdiIcon("arrow-right", 14, AppTheme.TextMuted)
+                        { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 4, 0, 0) }, target }
+                });
+            }
+            var item = new StackPanel { Spacing = AppTheme.Space.XS, Children = { anchors } };
+            if (!string.IsNullOrWhiteSpace(d.Reason)) item.Children.Add(RichText.Create(d.Reason, TextRole.Secondary));
             if (!string.IsNullOrWhiteSpace(d.Condition))
             {
                 var alt = new StackPanel { Spacing = 2 };
@@ -120,19 +117,16 @@ internal static class DictionaryInsightBlocks
     public static Control? Grammar(IReadOnlyList<GrammarHighlight> highlights)
     {
         if (highlights.Count == 0) return null;
-        return RichBlocks.Table("1*,3*", ["语法结构", "原文与解析"], highlights.Select(h =>
+        return RichBlocks.RuledRows(highlights.Select(h =>
         {
-            var label = TextStyles.Selectable(h.Label, TextRole.Term);
-            label.VerticalAlignment = VerticalAlignment.Top;
-            var quote = TextStyles.Selectable(h.Quote, TextRole.ExampleSource);
-            quote.Foreground = AppTheme.Insight;
-            var analysis = new StackPanel
-            {
-                Spacing = AppTheme.Space.XS, VerticalAlignment = VerticalAlignment.Top,
-                Children = { quote, RichText.Create(h.Explanation, TextRole.Secondary) }
-            };
-            return (IReadOnlyList<Control>)[label, analysis];
-        }).ToArray());
+            var head = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.XS };
+            if (!string.IsNullOrWhiteSpace(h.Label))
+                head.Children.Add(StudioUi.CreateTag(h.Label, TextRole.Label, AppTheme.Hues.Violet, wrap: true));
+            if (!string.IsNullOrWhiteSpace(h.Quote)) head.Children.Add(TextStyles.Selectable(h.Quote, TextRole.ExampleSource));
+            var analysis = new StackPanel { Spacing = AppTheme.Space.XS, Children = { head } };
+            if (!string.IsNullOrWhiteSpace(h.Explanation)) analysis.Children.Add(RichText.Create(h.Explanation, TextRole.Secondary));
+            return analysis;
+        }));
     }
 
     public static Control? Structure(IReadOnlyList<ClauseNode> clauses)
@@ -142,15 +136,16 @@ internal static class DictionaryInsightBlocks
         {
             var role = c.Depth == 0
                 ? StudioUi.CreateChip(c.Role, foreground: AppTheme.Insight, background: AppTheme.InsightSoft)
-                : StudioUi.CreateTag(c.Role, TextRole.Label);
+                : StudioUi.CreateTag(c.Depth > 3 ? $"{c.Role} · 第 {c.Depth + 1} 层" : c.Role, TextRole.Label, wrap: true);
             role.VerticalAlignment = VerticalAlignment.Top;
             role.Margin = new Thickness(0, 1, 0, 0);
             var quote = TextStyles.Selectable(c.Quote, TextRole.ExampleSource);
             var text = new StackPanel { Spacing = 1, Children = { quote } };
             if (!string.IsNullOrWhiteSpace(c.Note)) text.Children.Add(RichText.Create(c.Note, TextRole.Annotation));
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = AppTheme.Space.S, Children = { role, text } };
+            var row = new ReadingGrid("Auto,*") { ColumnSpacing = AppTheme.Space.S, Children = { role, text } };
             Grid.SetColumn(text, 1);
-            return (c.Depth, (Control)row);
+            // Keep the full semantic depth in the label without consuming a narrow panel with indentation.
+            return (Math.Min(c.Depth, 3), (Control)row);
         }));
     }
 
@@ -164,7 +159,7 @@ internal static class DictionaryInsightBlocks
         if (tone.Tones.Count > 0)
         {
             var chips = new WrapPanel { ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S };
-            foreach (var t in tone.Tones) chips.Children.Add(StudioUi.CreateTag(t, TextRole.Secondary));
+            foreach (var t in tone.Tones) chips.Children.Add(StudioUi.CreateTag(t, TextRole.Secondary, wrap: true));
             rows.Children.Add(StudioUi.CreateKeyValue("语气", chips, "ToneLabel", labelTop: 3));
         }
         if (!string.IsNullOrWhiteSpace(tone.Note))
@@ -176,12 +171,13 @@ internal static class DictionaryInsightBlocks
     public static Control? Literal(string literal, string actual)
     {
         if (string.IsNullOrWhiteSpace(literal)) return null;
-        var rows = new StackPanel { Spacing = AppTheme.Space.XS };
+        var rows = new StackPanel { Spacing = AppTheme.Space.S };
         Grid.SetIsSharedSizeScope(rows, true);
-        rows.Children.Add(StudioUi.CreateKeyValue("字面", TextStyles.Selectable(literal, TextRole.Secondary), "LiteralLabel"));
+        rows.Children.Add(StudioUi.CreateKeyValue("字面", TextStyles.Selectable(literal, TextRole.Body), "LiteralLabel"));
         if (!string.IsNullOrWhiteSpace(actual))
             rows.Children.Add(StudioUi.CreateKeyValue("实际", TextStyles.Selectable(actual, TextRole.Body), "LiteralLabel"));
-        return rows;
+        return new Border { Background = AppTheme.InputBg, CornerRadius = new CornerRadius(AppTheme.Radius.M),
+            Padding = new Thickness(AppTheme.Space.M), Child = rows };
     }
 
     public static Control? Note(string? text, string icon, RichBlocks.CalloutTone tone) =>
@@ -295,20 +291,21 @@ internal static class DictionaryInsightBlocks
                 StrokeThickness = 1, StrokeThicknessUnit = TextDecorationUnit.Pixel
             }];
             var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = AppTheme.Space.S, RowSpacing = 3 };
-            AddLine(0, "close-circle-outline", AppTheme.Danger, wrong);
+            AddLine(0, "close-circle", AppTheme.Danger, wrong);
             if (!string.IsNullOrWhiteSpace(m.Right))
             {
                 var right = TextStyles.Selectable(m.Right, TextRole.Term);
                 right.Foreground = AppTheme.Hues.Sage.Ink;
-                AddLine(1, "check-circle-outline", AppTheme.Hues.Sage.Ink, right);
+                AddLine(1, "check-circle", AppTheme.Hues.Sage.Ink, right);
             }
             if (!string.IsNullOrWhiteSpace(m.Why))
             {
                 grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-                var why = RichText.Create(m.Why, TextRole.Secondary);
-                why.Margin = new Thickness(0, 2, 0, 0);
+                var why = new Border { Background = AppTheme.InputBg, CornerRadius = new CornerRadius(AppTheme.Radius.S),
+                    Padding = new Thickness(AppTheme.Space.S, AppTheme.Space.XS), Margin = new Thickness(0, AppTheme.Space.XS, 0, 0),
+                    Child = RichText.Create(m.Why, TextRole.Annotation) };
                 Grid.SetRow(why, grid.RowDefinitions.Count - 1);
-                Grid.SetColumn(why, 1);
+                Grid.SetColumnSpan(why, 2);
                 grid.Children.Add(why);
             }
             list.Children.Add(new Border
@@ -318,10 +315,16 @@ internal static class DictionaryInsightBlocks
                 Padding = new Thickness(AppTheme.Space.M, AppTheme.Space.S + 2), Child = grid
             });
 
-            void AddLine(int row, string icon, IBrush brush, Control text)
+            void AddLine(int row, string icon, IBrush brush, TextBlock text)
             {
                 grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-                var glyph = new MdiIcon(icon, 15, brush) { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 3, 0, 0) };
+                const double iconSize = 15;
+                // The visible letters sit slightly below the center of the first line box.
+                var iconTop = (text.LineHeight - iconSize) / 2 + 1.5;
+                var glyph = new MdiIcon(icon, iconSize, brush)
+                {
+                    VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, iconTop, 0, 0)
+                };
                 Grid.SetRow(glyph, row);
                 Grid.SetRow(text, row);
                 Grid.SetColumn(text, 1);
@@ -332,15 +335,11 @@ internal static class DictionaryInsightBlocks
         return list;
     }
 
-    public static Control? Alignment(IReadOnlyList<AlignedSentence> rows, Func<string, SelectableTextBlock> source)
+    public static Control? Alignment(IReadOnlyList<AlignedSentence> rows, Func<string, SelectableTextBlock> source,
+        Action<string, string>? targetLookup)
     {
         if (rows.Count == 0) return null;
-        return RichBlocks.Table("Auto,*,*", ["#", "原文", "译文"], rows.Select((r, i) => (IReadOnlyList<Control>)
-        [
-            TextStyles.Create((i + 1).ToString("D2"), TextRole.Numeral, wrap: false),
-            TextStyles.Apply(source(r.Source), TextRole.ExampleSource),
-            TextStyles.Selectable(r.Target, TextRole.ExampleTarget)
-        ]).ToArray());
+        return RichBlocks.TableFrame(new SentenceAlignmentGrid(rows, source, targetLookup));
     }
 
     internal static Button LinkText(string text, Action click, TextRole role = TextRole.Term)

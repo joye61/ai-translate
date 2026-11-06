@@ -1,6 +1,6 @@
 namespace AiTranslate.Core;
 
-/// <summary>Verified translations in source order. The key identifies the target and ordered source texts.</summary>
+/// <summary>Persistent verified plain-text translations. The key includes the source text and target language.</summary>
 public interface IVerifiedTranslationCache
 {
     string[]? ReadTranslations(string key);

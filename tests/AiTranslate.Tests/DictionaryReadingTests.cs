@@ -38,7 +38,7 @@ public sealed class DictionaryReadingTests
                     GrammarOrUsageNote = "后接动名词", Synonyms = ["cease"], Antonyms = ["continue"],
                     WordFamily = [new("名词", "stoppage")], UsageContrasts = [new("stop doing", "停止原来的事", "stop to do", "停下来做另一件事")]
                 };
-                var texts = Render(word);
+                var texts = Render(word, "展开「停止」的详解");
                 Assert.Single(texts, t => t.Contains(sample.SourceSentence, StringComparison.Ordinal));
                 Assert.Contains(texts, t => t.Contains("to cease", StringComparison.Ordinal));
                 Assert.Contains(texts, t => t.Contains("强调动作中断", StringComparison.Ordinal));
@@ -57,7 +57,7 @@ public sealed class DictionaryReadingTests
                 Assert.Contains(texts, t => t.Contains("保留结束的意味", StringComparison.Ordinal));
                 Assert.DoesNotContain(texts, t => t.Contains("已失效", StringComparison.Ordinal));
 
-                string[] Render(VocabularyEntry entry)
+                string[] Render(VocabularyEntry entry, string? expand = null)
                 {
                     var details = new DictionaryDetails(speech, settings, (_, _, _) => { });
                     details.ShowEntry(entry.ToDictionaryResult(), complete: true);
@@ -66,6 +66,14 @@ public sealed class DictionaryReadingTests
                     try
                     {
                         window.UpdateLayout();
+                        if (expand is not null)
+                        {
+                            Assert.DoesNotContain(details.GetVisualDescendants().OfType<TextBlock>(),
+                                t => t.IsEffectivelyVisible && t.Text == "to cease");
+                            details.GetVisualDescendants().OfType<Button>().Single(b => Avalonia.Automation.AutomationProperties.GetName(b) == expand)
+                                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                            window.UpdateLayout();
+                        }
                         return details.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible)
                             .Select(t => t.Text ?? t.Inlines?.Text ?? "").ToArray();
                     }
@@ -209,21 +217,19 @@ public sealed class DictionaryReadingTests
                 Assert.Equal(["six"], queries);
 
                 second.SelectAll();
+                var linked = At(second, 11);
+                window.MouseDown(linked, MouseButton.Right);
+                window.MouseUp(linked, MouseButton.Right);
+                Assert.Equal(["six"], queries);
+                Assert.False(second.ContextFlyout?.IsOpen == true);
+                Assert.False(second.ContextMenu?.IsOpen == true);
                 var point = At(second, 3);
                 window.MouseDown(point, MouseButton.Right);
                 window.MouseUp(point, MouseButton.Right);
-                var menu = second.ContextMenu!;
-                Assert.True(menu.IsOpen);
                 Assert.Equal("four five six", second.SelectedText);
-                var copy = (MenuItem)menu.Items[1]!;
-                Assert.True(copy.IsEnabled);
-                var find = (MenuItem)menu.Items[0]!;
-                var menuRoot = TopLevel.GetTopLevel(find)!;
-                menuRoot.UpdateLayout();
-                var menuPoint = find.TranslatePoint(new Point(find.Bounds.Width / 2, find.Bounds.Height / 2), menuRoot)!.Value;
-                menuRoot.MouseDown(menuPoint, MouseButton.Left);
-                menuRoot.MouseUp(menuPoint, MouseButton.Left);
                 Assert.Equal(["six", "four five six"], queries);
+                Assert.False(second.ContextFlyout?.IsOpen == true);
+                Assert.False(second.ContextMenu?.IsOpen == true);
 
                 editor.Focus();
                 editor.SelectAll();
@@ -307,8 +313,7 @@ public sealed class DictionaryReadingTests
                 Assert.Equal(source, reader.SelectedText);
                 reader.SelectionStart = source.IndexOf("close", StringComparison.Ordinal);
                 reader.SelectionEnd = reader.SelectionStart + 5;
-                var search = (MenuItem)reader.ContextMenu!.Items[0]!;
-                search.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                reader.RaiseEvent(new ContextRequestedEventArgs());
                 Assert.Equal(("close", "Stay close."), queries.Last());
             }
             finally

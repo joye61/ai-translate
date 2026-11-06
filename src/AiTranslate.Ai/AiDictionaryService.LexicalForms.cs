@@ -5,10 +5,7 @@ namespace AiTranslate.Ai;
 
 public sealed partial class AiDictionaryService
 {
-    private const int MaxUsageCases = 3;
-    private const int MaxRelatedForms = 4;
-
-    private static IReadOnlyList<SenseUsageCase> ReadUsageCases(JsonElement sense, int maximum = MaxUsageCases)
+    private static IReadOnlyList<SenseUsageCase> ReadUsageCases(JsonElement sense)
     {
         if (!sense.TryGetProperty("usageCases", out var items) || items.ValueKind != JsonValueKind.Array) return [];
         var cases = new List<SenseUsageCase>();
@@ -22,7 +19,6 @@ public sealed partial class AiDictionaryService
             if (condition.Length == 0 || expression.Length == 0 || (grammar.Length == 0 && meaning.Length == 0)) continue;
             var item = new SenseUsageCase(condition, grammar, expression, meaning);
             if (!cases.Any(c => SameCase(c, item))) cases.Add(item);
-            if (cases.Count == maximum) break;
         }
         return cases.ToArray();
     }
@@ -31,7 +27,7 @@ public sealed partial class AiDictionaryService
         SameText(a.Condition, b.Condition) && SameText(a.Expression, b.Expression);
 
     private static IReadOnlyList<RelatedForm> ReadWordFamily(JsonElement root, string headword, bool englishWord,
-        IReadOnlyList<PartOfSpeechSense> senses, IReadOnlyList<RelatedForm>? previous = null, int maximum = MaxRelatedForms)
+        IReadOnlyList<PartOfSpeechSense> senses, IReadOnlyList<RelatedForm>? previous = null)
     {
         var existing = previous ?? [];
         if (!root.TryGetProperty("wordFamily", out var items) || items.ValueKind != JsonValueKind.Array) return existing;
@@ -70,7 +66,7 @@ public sealed partial class AiDictionaryService
                 }
             }
             var at = forms.FindIndex(f => SameRelatedForm(f, form));
-            if (at < 0 && forms.Count < maximum) forms.Add(form);
+            if (at < 0) forms.Add(form);
             else if (at >= 0 && string.IsNullOrEmpty(forms[at].Relation) && relation.Length > 0) forms[at] = form;
         }
         return forms.SequenceEqual(existing) ? existing : forms.ToArray();

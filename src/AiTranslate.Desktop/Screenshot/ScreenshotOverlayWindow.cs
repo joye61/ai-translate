@@ -2,7 +2,6 @@ using System.Diagnostics;
 using AiTranslate.Ai;
 using AiTranslate.Core;
 using AiTranslate.Ocr;
-using AiTranslate.Vocabulary;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -58,7 +57,6 @@ internal sealed class ScreenshotOverlayWindow : Window
     private byte[]? _croppedPng;
     private OcrResult? _ocrResult;
     private IReadOnlyList<TranslationRegion> _regions = [];
-    private readonly IVerifiedTranslationCache _translationCache = new DictionaryEntryCache();
     private TranslationImage? _composedImage;
     private string? _sourceText;
     private string? _translatedFullText;
@@ -392,11 +390,11 @@ internal sealed class ScreenshotOverlayWindow : Window
 
             var lang = TranslationLanguages.Get(languageId);
             UpdateToolbarState($"正在原位翻译为 {lang.DisplayName}…");
-            var transport = _settings.CreateTransport();
+            var transport = _settings.CreateTransport() ?? throw new AiException("请在「引擎与快捷键」中配置 AI 引擎后再翻译。");
             using var ownedTransport = transport as IDisposable;
-            var service = new AiTranslationService(transport, _translationCache);
+            var service = new AiTranslationService(transport);
             var regionTexts = await service.TranslateRegionsAsync(
-                _regions.Select(r => new TranslationSourceRegion(r.Id, r.Text)).ToArray(), languageId, token, forceRefresh: forceRetry);
+                _regions.Select(r => new TranslationSourceRegion(r.Id, r.Text)).ToArray(), languageId, token);
             token.ThrowIfCancellationRequested();
 
             _composedImage?.Dispose();
@@ -447,7 +445,12 @@ internal sealed class ScreenshotOverlayWindow : Window
     private void SaveToVocabularyNotebook()
     {
         if (string.IsNullOrWhiteSpace(_sourceText) || string.IsNullOrWhiteSpace(_translatedFullText)) return;
-        _onQuickSaveToNotebook(_sourceText.Trim(), _translatedFullText.Trim());
+        try { _onQuickSaveToNotebook(_sourceText.Trim(), _translatedFullText.Trim()); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            UpdateToolbarState($"收录失败。{ex.Message}");
+            return;
+        }
         UpdateToolbarState("已将截图原文与译文收录至「生词本」！");
     }
 

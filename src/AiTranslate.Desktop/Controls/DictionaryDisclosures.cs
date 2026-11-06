@@ -13,7 +13,7 @@ internal sealed class DictionaryDisclosures
     private readonly Dictionary<(EntryBlock, string, int), bool> _choices = [];
 
     public Button Toggle(EntryBlock block, string group, int ordinal, string subject, string label,
-        Control details, bool initiallyOpen)
+        Control details)
     {
         var key = (block, group, ordinal);
         var icon = new MdiIcon("chevron-down", 16, AppTheme.TextSecondary);
@@ -38,7 +38,7 @@ internal sealed class DictionaryDisclosures
             AutomationProperties.SetName(button, $"{action}「{subject}」的{label}");
             ToolTip.SetTip(button, action + label);
         }
-        Show(_choices.GetValueOrDefault(key, initiallyOpen));
+        Show(_choices.GetValueOrDefault(key));
         button.Click += (_, _) =>
         {
             _choices[key] = !details.IsVisible;

@@ -65,7 +65,20 @@ public sealed record RelatedForm(string Label, string Value, string PartOfSpeech
         string.Equals(Value, headword.Trim(), StringComparison.OrdinalIgnoreCase);
 }
 
-public sealed record UsageContrast(string LeftForm, string LeftUse, string RightForm, string RightUse);
+public sealed record UsageContrast(string LeftForm, string LeftUse, string RightForm, string RightUse)
+{
+    public BilingualExample? LeftExample { get; init; }
+    public BilingualExample? RightExample { get; init; }
+}
+
+/// <summary>One actionable usage topic, with its own conditions and optional demonstration.</summary>
+public sealed record UsageGuidance(string Title, string Explanation)
+{
+    public BilingualExample? Example { get; init; }
+}
+
+/// <summary>A distinct pronunciation goal and plain source-language text that can be spoken.</summary>
+public sealed record PronunciationDrill(string Focus, string Text, string Tip);
 
 public sealed record BilingualExample(
     string SourceSentence,
@@ -117,7 +130,14 @@ public sealed record DictionaryEntryResult
     public string SourceReadingNote { get; init; } = "";
     public string GlossaryUsageNote { get; init; } = "";
     public string PronunciationTip { get; init; } = "";
+    public IReadOnlyList<PronunciationDrill> PronunciationDrills { get; init; } = [];
+    public IReadOnlyList<UsageGuidance> UsageGuidance { get; init; } = [];
+    public IReadOnlyList<EntryExplanation> EtymologyNotes { get; init; } = [];
+    public IReadOnlyList<MnemonicStrategy> Mnemonics { get; init; } = [];
+    public IReadOnlyList<EntryExplanation> CulturalNotes { get; init; } = [];
+    public IReadOnlyList<ToneEvidence> ToneEvidence { get; init; } = [];
     public IReadOnlyList<EntryBlock> ReviewedBlocks { get; init; } = [];
+    public DictionaryProcessing? Processing { get; init; }
     // Cache metadata. Older entries can be reviewed once when an engine becomes available.
     public bool LexicalCoverageReviewed { get; init; }
     public string Pronunciation { get; init; } = "";
@@ -188,6 +208,7 @@ public sealed record VocabularyEntry
     // The lookup context identifies a dictionary result. The displayed capture can also be a suggested example.
     public string? DictionaryContext { get; init; }
     public long DictionaryRevision { get; init; }
+    public DictionaryProcessing? DictionaryProcessing { get; init; }
     public string? DictionaryCacheKey { get; init; }
     public string? ReaderLanguage { get; init; }
     public string? DictionaryContextMeaning { get; init; }
@@ -196,6 +217,12 @@ public sealed record VocabularyEntry
     public string SourceReadingNote { get; init; } = "";
     public string GlossaryUsageNote { get; init; } = "";
     public string PronunciationTip { get; init; } = "";
+    public IReadOnlyList<PronunciationDrill> PronunciationDrills { get; init; } = [];
+    public IReadOnlyList<UsageGuidance> UsageGuidance { get; init; } = [];
+    public IReadOnlyList<EntryExplanation> EtymologyNotes { get; init; } = [];
+    public IReadOnlyList<MnemonicStrategy> Mnemonics { get; init; } = [];
+    public IReadOnlyList<EntryExplanation> CulturalNotes { get; init; } = [];
+    public IReadOnlyList<ToneEvidence> ToneEvidence { get; init; } = [];
 
     public string GetDictionaryContext() => DictionaryContext ??
         (ContextSentence == Examples.FirstOrDefault()?.SourceSentence ? "" : ContextSentence.Trim().ReplaceLineEndings("\n"));
@@ -266,15 +293,8 @@ public sealed record VocabularyEntry
     public bool IsDue(DateTimeOffset now) => Stage != MemoryStage.Mastered && NextReviewAt <= now;
 
     /// <summary>Calculates current memory retention probability R in [0, 1] using FSRS forgetting curve.</summary>
-    public double EstimateRetrievability(DateTimeOffset now)
-    {
-        if (Stage == MemoryStage.New || LastReviewedAt is null || StabilityDays <= 0.01)
-            return Stage == MemoryStage.Mastered ? 1.0 : 0.0;
-        var elapsedDays = Math.Max(0, (now - LastReviewedAt.Value).TotalDays);
-        // FSRS power-law forgetting curve: R(t, S) = (1 + 19/81 * t / S)^(-0.5)
-        var r = Math.Pow(1.0 + (19.0 / 81.0) * (elapsedDays / StabilityDays), -0.5);
-        return Math.Clamp(r, 0.0, 1.0);
-    }
+    public double EstimateRetrievability(DateTimeOffset now) =>
+        SpacedRepetitionScheduler.EstimateRetrievability(Stage, LastReviewedAt, StabilityDays, now);
 }
 
 public sealed record ReviewLogRecord(
@@ -299,6 +319,16 @@ public sealed record ReviewLogRecord(
 /// </summary>
 public static class SpacedRepetitionScheduler
 {
+    public static double EstimateRetrievability(MemoryStage stage, DateTimeOffset? lastReviewedAt, double stabilityDays, DateTimeOffset now)
+    {
+        if (stage == MemoryStage.New || lastReviewedAt is null || stabilityDays <= 0.01)
+            return stage == MemoryStage.Mastered ? 1.0 : 0.0;
+        var elapsedDays = Math.Max(0, (now - lastReviewedAt.Value).TotalDays);
+        // FSRS power-law forgetting curve: R(t, S) = (1 + 19/81 * t / S)^(-0.5)
+        var r = Math.Pow(1.0 + (19.0 / 81.0) * (elapsedDays / stabilityDays), -0.5);
+        return Math.Clamp(r, 0.0, 1.0);
+    }
+
     public sealed record SchedulePreview(
         TimeSpan AgainInterval,
         TimeSpan HardInterval,

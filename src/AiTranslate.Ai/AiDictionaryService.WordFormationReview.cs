@@ -7,7 +7,7 @@ public sealed partial class AiDictionaryService
     private const string WordFormationReviewGuide = """
         etymologyAndRoot 是独立的词源说明。仅修订它时，省略 morphemes；历史词源不足以证明现代词形可以拆分。
         拼写相似、译义相近或其他栏目的助记联想都不能证明或否定同源关系。证据不足时省略该断言。
-        词素按词中顺序给出实际可解释的部分，可以是二项，也可以是三至五项。不要为凑数拆词或编造同源关系。
+        词素按词中顺序给出实际可解释的部分，有多少个实际部分就列多少个，不截断后缀或中间词素。不要为凑数拆词或编造同源关系。
         每项形如 {"part":"un-","meaning":"不","kind":"prefix","note":"可选说明"}。kind 取 prefix、root、suffix；
         meaning 保持简短，较长的解释放 note。已有拆分为空且可以可靠补充时，可一次填写完整的 morphemes 数组。
         """;

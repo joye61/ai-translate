@@ -64,9 +64,61 @@ public sealed class DictionaryBlockReviewTests
             Assert.Equal(progress.NextReviewAt, saved.NextReviewAt);
             Assert.Equal("菜单", saved.SourceTitle);
             Assert.Equal("点单", saved.UserPersonalNote);
-            Assert.Equal(2, calls);
+            Assert.Equal(1, calls); // The second click reused the review for this content and context.
         }
         finally { dir.Delete(true); }
+    }
+
+    [Fact]
+    public async Task PrimaryReviewRefreshesTheSavedTranslationAndDropsObsoleteQuotes()
+    {
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var entry = new DictionaryEntryResult
+            {
+                SourceText = "Close the door.", ItemType = VocabularyItemType.Sentence, PrimaryTranslation = "靠近门。",
+                LiteralTranslation = "关上那扇门。", ReaderLanguage = "zh-Hans", LookupContext = "He pointed to the door.",
+                TranslationDecisions = [new("Close", "靠近", "取接近义。")], UsageNotes = "祈使句。"
+            };
+            var cache = new DictionaryEntryCache(Path.Combine(dir.FullName, "lookup.db"));
+            var path = Path.Combine(dir.FullName, "cards.json");
+            var cards = new VocabularyService(path);
+            var card = cards.AddOrUpdateFromDictionary(entry, contextSentence: entry.LookupContext, sourceTitle: "课堂", userNote: "听力");
+            var progress = cards.SubmitReview(card.Id, ReviewRating.Good);
+            var service = new AiDictionaryService(() => new Reply(payload =>
+            {
+                Assert.Equal("自然译文", (string?)payload["section"]);
+                Assert.Equal("primaryTranslation", Assert.Single(payload["current_section"]!.AsObject()).Key);
+                return """{"status":"improved","fields":{"primaryTranslation":"请关门。"}}""";
+            }), cache, refreshCollectedEntries: cards.RefreshCollectedEntries);
+            var result = await service.ReviewBlockAsync(entry, EntryBlock.PrimaryTranslation, default);
+            Assert.Empty(result.TranslationDecisions);
+            Assert.True(result.Processing!.CanResumeExtension);
+            Assert.Equal(entry.UsageNotes, result.UsageNotes);
+            var saved = new VocabularyService(path).QueryEntries(new() { NotebookId = card.NotebookId }).Single(c => c.Id == card.Id);
+            Assert.Equal("请关门。", saved.Translation);
+            Assert.Equal(entry.LiteralTranslation, saved.LiteralTranslation);
+            Assert.Empty(saved.TranslationDecisions);
+            Assert.Equal(entry.LookupContext, saved.ContextSentence);
+            Assert.Equal("听力", saved.UserPersonalNote);
+            Assert.Equal(progress.NextReviewAt, saved.NextReviewAt);
+            Assert.Same(result, await service.ReviewBlockAsync(result, EntryBlock.PrimaryTranslation, default));
+        }
+        finally { dir.Delete(true); }
+    }
+
+    [Fact]
+    public async Task PrimaryWordReviewRemovesNotesForReplacedRenderings()
+    {
+        var entry = Coffee with { PrimaryTranslation = "咖啡；茶",
+            TranslationOptions = [new("咖啡", "饮品", "通常用法"), new("茶", "饮品", "错误译义")] };
+        var service = new AiDictionaryService(() => new Reply(_ =>
+            """{"status":"improved","fields":{"primaryTranslation":"咖啡；咖啡豆"}}"""));
+        var result = await service.ReviewBlockAsync(entry, EntryBlock.PrimaryTranslation, default);
+        Assert.Equal(entry.TranslationOptions[0], Assert.Single(result.TranslationOptions));
+        Assert.Equal(entry.Senses, result.Senses);
+        Assert.Equal(entry.Collocations, result.Collocations);
     }
 
     [Fact]
@@ -83,9 +135,10 @@ public sealed class DictionaryBlockReviewTests
             var late = new AiDictionaryService(() => new Reply(_ =>
             {
                 Assert.True(cache.TryReplace(stamp, entry with { PrimaryTranslation = "更新的译文" }, stamp.Revision + 1));
-                return """{"status":"improved","edits":[{"path":"/senses/0/scenario","value":"餐馆点单"}]}""";
+                return """{"status":"improved","edits":[{"path":"/usageNotes","value":"餐馆点单"}]}""";
             }), cache);
-            await Assert.ThrowsAsync<AiException>(() => late.ReviewBlockAsync(entry, EntryBlock.Senses, default));
+            // A different, still-unchecked block must use the same compare-and-swap guard.
+            await Assert.ThrowsAsync<AiException>(() => late.ReviewBlockAsync(entry, EntryBlock.UsageNotes, default));
             Assert.Equal("更新的译文", cache.Read(stamp.Key)!.PrimaryTranslation);
             var stale = new AiDictionaryService(() => throw new Exception("stale review contacted AI"), cache);
             await Assert.ThrowsAsync<AiException>(() => stale.ReviewBlockAsync(entry, EntryBlock.Senses, default));

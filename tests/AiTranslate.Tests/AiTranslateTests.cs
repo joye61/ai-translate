@@ -152,7 +152,7 @@ public sealed class VocabularyAndFsrsTests
     [Fact]
     public void VocabularyService_DefaultSortOrderUsesCreatedAtNotUpdatedAt()
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_sort_test_{Guid.NewGuid():N}.json");
+        var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_sort_test_{Guid.NewGuid():N}.sqlite3");
         try
         {
             var service = new VocabularyService(tempFile);
@@ -195,7 +195,7 @@ public sealed class VocabularyAndFsrsTests
     [Fact]
     public void VocabularyService_ImportFromJson_AvoidsDuplicateIdCollisions()
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_import_test_{Guid.NewGuid():N}.json");
+        var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_import_test_{Guid.NewGuid():N}.sqlite3");
         try
         {
             var service = new VocabularyService(tempFile);
@@ -228,7 +228,7 @@ public sealed class VocabularyAndFsrsTests
     [Fact]
     public void VocabularyExportFormatter_AnkiTsv_SanitizesTabsAndNewlinesInTags()
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_anki_test_{Guid.NewGuid():N}.json");
+        var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_anki_test_{Guid.NewGuid():N}.sqlite3");
         try
         {
             var service = new VocabularyService(tempFile);
@@ -257,7 +257,7 @@ public sealed class VocabularyAndFsrsTests
     [Fact]
     public void VocabularyService_SeedsAndSupportsCrudFilterAndMultiFormatExport()
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_test_{Guid.NewGuid():N}.json");
+        var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_test_{Guid.NewGuid():N}.sqlite3");
         try
         {
             var service = new VocabularyService(tempFile);
@@ -411,6 +411,7 @@ public sealed class AiDictionaryServiceTests
     {
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
+            if (PipelineReplies.TryEmptyStage(messages, out var stage)) return Task.FromResult(stage);
             if (JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!["senses"] is not null)
                 return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));
             foreach (var character in prefix) onText(character.ToString());
@@ -515,6 +516,7 @@ public sealed class AiDictionaryServiceTests
     {
         public Task<AiCompletion> CompleteAsync(IReadOnlyList<JsonObject> messages, JsonArray tools, Action<string> onText, CancellationToken token)
         {
+            if (PipelineReplies.TryEmptyStage(messages, out var stage)) return Task.FromResult(stage);
             if (JsonNode.Parse(messages[1]["content"]!.GetValue<string>())!["senses"] is not null)
                 return Task.FromResult(new AiCompletion("""{"senses":[],"collocations":[]}""", []));
             onText(first);

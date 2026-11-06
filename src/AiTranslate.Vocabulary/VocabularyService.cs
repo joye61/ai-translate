@@ -1,12 +1,14 @@
-using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AiTranslate.Core;
 
 namespace AiTranslate.Vocabulary;
 
 internal sealed class VocabularyStoreSnapshot
 {
+    [JsonRequired]
     public List<VocabularyNotebook> Notebooks { get; set; } = [];
+    [JsonRequired]
     public List<VocabularyEntry> Entries { get; set; } = [];
     public List<ReviewLogRecord> ReviewLogs { get; set; } = [];
 }
@@ -16,9 +18,7 @@ internal sealed class VocabularyStoreSnapshot
 /// </summary>
 public sealed partial class VocabularyService : IVocabularyService
 {
-    private readonly string _storagePath;
-    private readonly object _gate = new();
-    private VocabularyStoreSnapshot _store;
+    private readonly VocabularyDatabase _database;
 
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -29,85 +29,61 @@ public sealed partial class VocabularyService : IVocabularyService
 
     public event EventHandler? Changed;
 
-    public VocabularyService(string? storagePath = null)
-    {
-        _storagePath = storagePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AiTranslate",
-            "vocabulary-store.json");
-        _store = LoadOrInitialize();
-    }
+    public VocabularyService(string? storagePath = null) => _database = new(storagePath);
 
-    public IReadOnlyList<VocabularyNotebook> GetNotebooks()
-    {
-        lock (_gate)
-        {
-            return _store.Notebooks.OrderByDescending(n => n.IsSystemDefault).ThenBy(n => n.CreatedAt).ToArray();
-        }
-    }
+    public IReadOnlyList<VocabularyNotebook> GetNotebooks() =>
+        _database.Read(db => db.Books().OrderByDescending(n => n.IsSystemDefault).ThenBy(n => n.CreatedAt).ToArray());
 
     // Look only at saved terminology matching this text and language. Notes, screenshots
     // and unrelated notebook entries must never be sent as model context.
     public IReadOnlyList<CollocationItem> FindGlossaryTerms(string text, string targetLanguage)
     {
-        lock (_gate)
-        {
-            return _store.Entries
-                .Where(e => e.ItemType is VocabularyItemType.TechnicalTerm or VocabularyItemType.Phrase or VocabularyItemType.Idiom
-                    && e.TargetLanguage == targetLanguage && e.Headword.Length is > 0 and <= 100
-                    && e.Translation.Length is > 0 and <= 240 && e.Headword != text
-                    && DictionaryTextMatch.IndexOf(text, e.Headword, comparison: StringComparison.Ordinal) >= 0)
-                .OrderByDescending(e => e.Headword.Length).ThenBy(e => e.Headword, StringComparer.Ordinal)
-                .Select(e => new CollocationItem(e.Headword, e.Translation)).Distinct().Take(8).ToArray();
-        }
+        return _database.Read(db => db.Rows("""
+                SELECT glossary_term,glossary_meaning FROM cards
+                WHERE target=$p0 AND glossary_term IS NOT NULL AND instr($p1,glossary_term)>0 ORDER BY rowid DESC
+                """, row => new CollocationItem(row.GetString(0), row.GetString(1)), targetLanguage, text)
+            .Where(t => t.Phrase != text &&
+                DictionaryTextMatch.IndexOf(text, t.Phrase, comparison: StringComparison.Ordinal) >= 0)
+            .OrderByDescending(t => t.Phrase.Length).ThenBy(t => t.Phrase, StringComparer.Ordinal).Distinct().ToArray());
     }
 
-    public IReadOnlyList<string> GetAllTags()
-    {
-        lock (_gate)
-        {
-            return _store.Entries
-                .SelectMany(e => e.Tags)
-                .Where(t => !string.IsNullOrWhiteSpace(t))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-        }
-    }
+    public IReadOnlyList<string> GetAllTags() => _database.Read(db =>
+        db.Rows("SELECT value FROM cards, json_each(cards.payload,'$.Tags')", r => r.GetString(0))
+            .Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToArray());
 
     public VocabularyEntry? FindByHeadword(string headword)
     {
         if (string.IsNullOrWhiteSpace(headword)) return null;
-        var normalized = headword.Trim();
-        lock (_gate)
-        {
-            return _store.Entries.FirstOrDefault(e => string.Equals(e.Headword, normalized, StringComparison.OrdinalIgnoreCase));
-        }
+        var word = headword.Trim();
+        return _database.Read(db => db.ByHead(word).FirstOrDefault(e => string.Equals(e.Headword, word, StringComparison.OrdinalIgnoreCase)));
     }
 
     public IReadOnlyList<VocabularyEntry> QueryEntries(VocabularyQueryFilter filter, DateTimeOffset? now = null)
     {
         ArgumentNullException.ThrowIfNull(filter);
         var currentTime = now ?? DateTimeOffset.UtcNow;
-        lock (_gate)
+        return _database.Read(db =>
         {
-            IEnumerable<VocabularyEntry> query = _store.Entries;
-
+            var conditions = new List<string>();
+            var parameters = new List<object?>();
+            void Filter(string comparison, object value)
+            {
+                conditions.Add(comparison + "$p" + parameters.Count);
+                parameters.Add(value);
+            }
             if (!string.IsNullOrWhiteSpace(filter.NotebookId) && filter.NotebookId != "all")
-                query = query.Where(e => string.Equals(e.NotebookId, filter.NotebookId, StringComparison.OrdinalIgnoreCase));
-
-            if (filter.ItemType.HasValue)
-                query = query.Where(e => e.ItemType == filter.ItemType.Value);
-
-            if (filter.Stage.HasValue)
-                query = query.Where(e => e.Stage == filter.Stage.Value);
-
-            if (filter.OnlyStarred)
-                query = query.Where(e => e.IsStarred);
-
+                Filter("book = ", FindNotebookId(db, filter.NotebookId) ?? filter.NotebookId);
+            if (filter.ItemType is { } kind) Filter("kind = ", (int)kind);
+            if (filter.Stage is { } stage) Filter("stage = ", (int)stage);
+            if (filter.OnlyStarred) conditions.Add("starred = 1");
             if (filter.OnlyDue)
-                query = query.Where(e => e.IsDue(currentTime));
-
+            {
+                Filter("stage <> ", (int)MemoryStage.Mastered);
+                Filter("due <= ", currentTime.UtcTicks);
+            }
+            var clause = conditions.Count == 0 ? "" : "WHERE " + string.Join(" AND ", conditions);
+            IEnumerable<VocabularyEntry> query = db.Cards(clause + " ORDER BY rowid DESC", parameters.ToArray());
             if (!string.IsNullOrWhiteSpace(filter.Tag))
                 query = query.Where(e => e.Tags.Any(t => string.Equals(t, filter.Tag, StringComparison.OrdinalIgnoreCase)));
 
@@ -120,6 +96,10 @@ public sealed partial class VocabularyService : IVocabularyService
                     e.ContextSentence.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
                     e.MemoryMnemonic.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
                     e.EtymologyAndRoot.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
+                    e.EtymologyNotes.Concat(e.CulturalNotes).Any(n => n.Title.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
+                        n.Explanation.Contains(kw, StringComparison.OrdinalIgnoreCase)) ||
+                    e.Mnemonics.Any(m => m.Method.Contains(kw, StringComparison.OrdinalIgnoreCase) || m.Cue.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
+                        m.Explanation.Contains(kw, StringComparison.OrdinalIgnoreCase)) ||
                     e.UserPersonalNote.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
                     e.Tags.Any(t => t.Contains(kw, StringComparison.OrdinalIgnoreCase)));
             }
@@ -137,26 +117,18 @@ public sealed partial class VocabularyService : IVocabularyService
             };
 
             return query.ToArray();
-        }
+        });
     }
 
     public IReadOnlyList<VocabularyEntry> GetDueQueue(string? notebookId = null, int maxCount = 50, DateTimeOffset? now = null)
     {
         var currentTime = now ?? DateTimeOffset.UtcNow;
-        lock (_gate)
-        {
-            IEnumerable<VocabularyEntry> query = _store.Entries;
-            if (!string.IsNullOrWhiteSpace(notebookId) && notebookId != "all")
-                query = query.Where(e => string.Equals(e.NotebookId, notebookId, StringComparison.OrdinalIgnoreCase));
-
-            return query
-                .Where(e => e.IsDue(currentTime))
-                .OrderBy(e => e.Stage == MemoryStage.Learning ? 0 : e.Stage == MemoryStage.Reviewing ? 1 : 2)
-                .ThenBy(e => e.NextReviewAt)
-                .ThenByDescending(e => e.IsStarred)
-                .Take(Math.Max(1, maxCount))
-                .ToArray();
-        }
+        var all = string.IsNullOrWhiteSpace(notebookId) || notebookId == "all";
+        var bookFilter = all ? "" : " AND book=$p4";
+        var clause = "WHERE stage<>$p0 AND due<=$p1" + bookFilter +
+            " ORDER BY (stage=$p2) DESC, due, starred DESC, rowid DESC LIMIT $p3";
+        object?[] values = [(int)MemoryStage.Mastered, currentTime.UtcTicks, (int)MemoryStage.Learning, Math.Max(1, maxCount)];
+        return _database.Read(db => db.Cards(clause, all ? values : [.. values, FindNotebookId(db, notebookId) ?? notebookId]));
     }
 
     public VocabularyDashboardStats GetDashboardStats(DateTimeOffset? now = null)
@@ -167,49 +139,49 @@ public sealed partial class VocabularyService : IVocabularyService
         // timezones ahead of UTC) as belonging to the wrong day.
         var localNow = currentTime.ToLocalTime();
         var todayStart = new DateTimeOffset(localNow.Date, localNow.Offset);
-        lock (_gate)
+        return _database.Read(db =>
         {
-            var entries = _store.Entries;
-            var reviewedToday = _store.ReviewLogs.Count(l => l.ReviewedAt >= todayStart);
-            var activeEntries = entries.Where(e => e.Stage != MemoryStage.New).ToArray();
-            var avgRetention = activeEntries.Length == 0
-                ? 1.0
-                : activeEntries.Average(e => e.EstimateRetrievability(currentTime));
-
-            var byNotebook = _store.Notebooks.ToDictionary(
-                n => n.Id,
-                n => entries.Count(e => string.Equals(e.NotebookId, n.Id, StringComparison.OrdinalIgnoreCase)),
-                StringComparer.OrdinalIgnoreCase);
-
-            var byType = Enum.GetValues<VocabularyItemType>()
-                .ToDictionary(t => t, t => entries.Count(e => e.ItemType == t));
-
-            return new VocabularyDashboardStats(
-                TotalEntries: entries.Count,
-                DueTodayCount: entries.Count(e => e.IsDue(currentTime)),
-                NewCount: entries.Count(e => e.Stage == MemoryStage.New),
-                LearningCount: entries.Count(e => e.Stage == MemoryStage.Learning),
-                ReviewingCount: entries.Count(e => e.Stage == MemoryStage.Reviewing),
-                MasteredCount: entries.Count(e => e.Stage == MemoryStage.Mastered),
-                StarredCount: entries.Count(e => e.IsStarred),
-                ReviewedTodayCount: reviewedToday,
-                AverageRetentionRate: Math.Round(avgRetention * 100.0, 1),
-                CountByNotebook: byNotebook,
-                CountByType: byType);
-        }
+            // Statistics need scheduling fields only, even when a saved passage has a large reading payload.
+            var reviewedToday = (int)db.Number("SELECT COUNT(*) FROM review_logs WHERE reviewed >= $p0", todayStart.UtcTicks);
+            var byNotebook = db.Books().ToDictionary(n => n.Id, _ => 0, StringComparer.OrdinalIgnoreCase);
+            var byType = Enum.GetValues<VocabularyItemType>().ToDictionary(t => t, _ => 0);
+            var byStage = Enum.GetValues<MemoryStage>().ToDictionary(stage => stage, _ => 0);
+            var due = 0;
+            var starred = 0;
+            var active = 0;
+            double retention = 0;
+            var rows = db.Rows("SELECT book,kind,stage,due,starred,stability,last_review FROM cards", r => (
+                Book: r.GetString(0), Kind: (VocabularyItemType)r.GetInt32(1), Stage: (MemoryStage)r.GetInt32(2),
+                Due: r.GetInt64(3), Starred: r.GetBoolean(4), Stability: r.GetDouble(5),
+                Reviewed: r.IsDBNull(6) ? (DateTimeOffset?)null : new DateTimeOffset(r.GetInt64(6), TimeSpan.Zero)));
+            foreach (var row in rows)
+            {
+                byNotebook[row.Book]++;
+                byType[row.Kind] = byType.GetValueOrDefault(row.Kind) + 1;
+                byStage[row.Stage] = byStage.GetValueOrDefault(row.Stage) + 1;
+                if (row.Due <= currentTime.UtcTicks && row.Stage != MemoryStage.Mastered) due++;
+                if (row.Starred) starred++;
+                if (row.Stage == MemoryStage.New) continue;
+                active++;
+                retention += SpacedRepetitionScheduler.EstimateRetrievability(row.Stage, row.Reviewed, row.Stability, currentTime);
+            }
+            return new VocabularyDashboardStats(rows.Count, due, byStage[MemoryStage.New], byStage[MemoryStage.Learning],
+                byStage[MemoryStage.Reviewing], byStage[MemoryStage.Mastered], starred, reviewedToday,
+                active == 0 ? 100.0 : Math.Round(retention / active * 100.0, 1), byNotebook, byType);
+        });
     }
 
     public VocabularyNotebook CreateNotebook(string name, string description, string iconName = "book-open-variant", string accentHex = "#3B82F6")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         var trimmed = name.Trim();
-        VocabularyNotebook created;
-        lock (_gate)
+        var inserted = false;
+        var saved = _database.Write(db =>
         {
-            var existing = _store.Notebooks.FirstOrDefault(n => string.Equals(n.Name, trimmed, StringComparison.OrdinalIgnoreCase));
+            var existing = db.Books().FirstOrDefault(n => string.Equals(n.Name, trimmed, StringComparison.OrdinalIgnoreCase));
             if (existing != null) return existing;
 
-            created = new VocabularyNotebook
+            var created = new VocabularyNotebook
             {
                 Id = $"nb_{Guid.NewGuid():N}"[..12],
                 Name = trimmed,
@@ -218,10 +190,12 @@ public sealed partial class VocabularyService : IVocabularyService
                 AccentColorHex = accentHex,
                 CreatedAt = DateTimeOffset.UtcNow
             };
-            CommitOrganization([.. _store.Notebooks, created], _store.Entries);
-        }
-        Changed?.Invoke(this, EventArgs.Empty);
-        return created;
+            db.InsertBook(created);
+            inserted = true;
+            return created;
+        });
+        if (inserted) Changed?.Invoke(this, EventArgs.Empty);
+        return saved;
     }
 
     public VocabularyEntry AddOrUpdateFromDictionary(
@@ -236,17 +210,17 @@ public sealed partial class VocabularyService : IVocabularyService
         var now = DateTimeOffset.UtcNow;
         var headword = result.SourceText.Trim();
         var grammarNotes = GetGrammarNotes(result);
-        VocabularyEntry saved;
-
-        lock (_gate)
+        var changed = false;
+        var collected = _database.Write(db =>
         {
-            notebookId = ResolveNotebookId(notebookId);
-            var index = _store.Entries.FindIndex(e => e.NotebookId == notebookId &&
+            notebookId = FindNotebookId(db, notebookId) ?? "default";
+            var current = db.ByHead(headword).FirstOrDefault(e => e.NotebookId == notebookId &&
                 MatchesDictionary(e, headword, result.TargetLanguage, result.LookupContext));
-            var entries = new List<VocabularyEntry>(_store.Entries);
-            if (index >= 0)
+            VocabularyEntry saved;
+            if (current is not null)
             {
-                var current = _store.Entries[index];
+                if (result.Processing?.Intent == DictionaryLookupIntent.Quick &&
+                    current.DictionaryProcessing?.Intent == DictionaryLookupIntent.Learning) return current;
                 if (result.CacheStamp is { } stamp && stamp.Revision < current.DictionaryRevision)
                     return current;
                 var translation = string.IsNullOrWhiteSpace(result.PrimaryTranslation) ? current.Translation : result.PrimaryTranslation;
@@ -255,6 +229,7 @@ public sealed partial class VocabularyService : IVocabularyService
                 {
                     DictionaryContext = result.LookupContext,
                     DictionaryRevision = result.CacheStamp?.Revision ?? current.DictionaryRevision,
+                    DictionaryProcessing = result.Processing ?? current.DictionaryProcessing,
                     DictionaryCacheKey = result.CacheStamp?.Key ?? current.DictionaryCacheKey,
                     ReaderLanguage = result.ReaderLanguage ?? current.ReaderLanguage,
                     DictionaryContextMeaning = result.ContextMeaning ?? current.DictionaryContextMeaning,
@@ -263,6 +238,12 @@ public sealed partial class VocabularyService : IVocabularyService
                     SourceReadingNote = result.SourceReadingNote,
                     GlossaryUsageNote = result.GlossaryUsageNote,
                     PronunciationTip = result.PronunciationTip,
+                    PronunciationDrills = result.PronunciationDrills.Count > 0 ? result.PronunciationDrills : current.PronunciationDrills,
+                    UsageGuidance = result.UsageGuidance.Count > 0 ? result.UsageGuidance : current.UsageGuidance,
+                    EtymologyNotes = result.EtymologyNotes.Count > 0 ? result.EtymologyNotes : current.EtymologyNotes,
+                    Mnemonics = result.Mnemonics.Count > 0 ? result.Mnemonics : current.Mnemonics,
+                    CulturalNotes = result.CulturalNotes.Count > 0 ? result.CulturalNotes : current.CulturalNotes,
+                    ToneEvidence = result.ToneEvidence.Count > 0 ? result.ToneEvidence : current.ToneEvidence,
                     Translation = translation,
                     LiteralTranslation = result.LiteralTranslation,
                     TranslationDecisions = result.TranslationDecisions.Count == 0 && current.Translation == translation &&
@@ -273,7 +254,7 @@ public sealed partial class VocabularyService : IVocabularyService
                     Pronunciation = string.IsNullOrWhiteSpace(result.Pronunciation) ? current.Pronunciation : result.Pronunciation,
                     CommonMistakes = string.IsNullOrWhiteSpace(result.CommonMistakes) ? current.CommonMistakes : result.CommonMistakes,
                     WordChoice = string.IsNullOrWhiteSpace(result.WordChoice) ? current.WordChoice : result.WordChoice,
-                    UsageContrasts = result.UsageContrasts.Count > 0 ? result.UsageContrasts : current.UsageContrasts,
+                    UsageContrasts = MergeRecapturedContrasts(result.UsageContrasts, current.UsageContrasts),
                     TranslationOptions = result.TranslationOptions,
                     Variants = result.Variants.Count > 0 ? result.Variants : current.Variants,
                     KeyPoints = result.KeyPoints.Count > 0 ? result.KeyPoints : current.KeyPoints,
@@ -304,7 +285,10 @@ public sealed partial class VocabularyService : IVocabularyService
                     LookupCount = current.LookupCount + 1,
                     UpdatedAt = now
                 };
-                entries[index] = saved;
+                if (result.Processing is { Review: DictionaryStageState.Completed } quality &&
+                    (quality.Issues.Count > 0 || result.PrimaryTranslation != current.Translation) ||
+                    result.Processing?.Extension == DictionaryStageState.Invalidated)
+                    saved = ApplyDictionary(saved, result, result.CacheStamp?.Revision ?? current.DictionaryRevision);
             }
             else
             {
@@ -330,80 +314,57 @@ public sealed partial class VocabularyService : IVocabularyService
                     UpdatedAt = now,
                     NextReviewAt = now
                 }, result, result.CacheStamp?.Revision ?? 0);
-                entries.Insert(0, saved);
             }
-            CommitOrganization(_store.Notebooks, entries);
-        }
-        Changed?.Invoke(this, EventArgs.Empty);
-        return saved;
+            db.SaveCard(saved);
+            changed = true;
+            return saved;
+        });
+        if (changed) Changed?.Invoke(this, EventArgs.Empty);
+        return collected;
     }
 
     public VocabularyEntry SaveEntry(VocabularyEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        var updated = entry with { UpdatedAt = DateTimeOffset.UtcNow };
-        lock (_gate)
+        var updated = _database.Write(db =>
         {
-            var idx = _store.Entries.FindIndex(e => e.Id == entry.Id);
-            if (idx >= 0) _store.Entries[idx] = updated;
-            else _store.Entries.Insert(0, updated);
-            PersistLocked();
-        }
+            var card = entry with { UpdatedAt = DateTimeOffset.UtcNow, NotebookId = FindNotebookId(db, entry.NotebookId) ?? "default" };
+            db.SaveCard(card);
+            return card;
+        });
         Changed?.Invoke(this, EventArgs.Empty);
         return updated;
     }
 
     public void ToggleStar(string entryId)
     {
-        lock (_gate)
+        var changed = _database.Write(db =>
         {
-            var idx = _store.Entries.FindIndex(e => e.Id == entryId);
-            if (idx < 0) return;
-            var current = _store.Entries[idx];
-            _store.Entries[idx] = current with { IsStarred = !current.IsStarred, UpdatedAt = DateTimeOffset.UtcNow };
-            PersistLocked();
-        }
-        Changed?.Invoke(this, EventArgs.Empty);
+            if (db.Card(entryId) is not { } card) return false;
+            db.SaveCard(card with { IsStarred = !card.IsStarred, UpdatedAt = DateTimeOffset.UtcNow });
+            return true;
+        });
+        if (changed) Changed?.Invoke(this, EventArgs.Empty);
     }
 
     public void DeleteEntry(string entryId)
     {
-        lock (_gate)
-        {
-            var entries = _store.Entries.Where(e => e.Id != entryId).ToList();
-            if (entries.Count == _store.Entries.Count) return;
-            CommitOrganization(_store.Notebooks, entries);
-        }
-        Changed?.Invoke(this, EventArgs.Empty);
+        if (_database.Write(db => db.Execute("DELETE FROM cards WHERE id=$p0", entryId)) > 0)
+            Changed?.Invoke(this, EventArgs.Empty);
     }
 
-    public VocabularyEntry SubmitReview(
-        string entryId,
-        ReviewRating rating,
-        int durationMs = 1500,
-        DateTimeOffset? now = null)
+    public VocabularyEntry SubmitReview(string entryId, ReviewRating rating, int durationMs = 1500, DateTimeOffset? now = null)
     {
         var reviewTime = now ?? DateTimeOffset.UtcNow;
-        VocabularyEntry updated;
-        lock (_gate)
+        var updated = _database.Write(db =>
         {
-            var idx = _store.Entries.FindIndex(e => e.Id == entryId);
-            if (idx < 0) throw new InvalidOperationException("找不到对应的生词卡片。");
-            var before = _store.Entries[idx];
-            updated = SpacedRepetitionScheduler.ApplyReview(before, rating, reviewTime);
-            _store.Entries[idx] = updated;
-            _store.ReviewLogs.Add(new ReviewLogRecord(
-                Id: $"rev_{Guid.NewGuid():N}"[..16],
-                EntryId: entryId,
-                Rating: rating,
-                PreviousStage: before.Stage,
-                NewStage: updated.Stage,
-                PreviousStability: before.StabilityDays,
-                NewStability: updated.StabilityDays,
-                DurationMs: durationMs,
-                ReviewedAt: reviewTime));
-            PersistLocked();
-        }
+            var before = db.Card(entryId) ?? throw new InvalidOperationException("找不到对应的生词卡片。");
+            var after = SpacedRepetitionScheduler.ApplyReview(before, rating, reviewTime);
+            db.SaveCard(after);
+            db.AddReview(new ReviewLogRecord($"rev_{Guid.NewGuid():N}"[..16], entryId, rating, before.Stage,
+                after.Stage, before.StabilityDays, after.StabilityDays, durationMs, reviewTime));
+            return after;
+        });
         Changed?.Invoke(this, EventArgs.Empty);
         return updated;
     }
@@ -425,88 +386,25 @@ public sealed partial class VocabularyService : IVocabularyService
         if (string.IsNullOrWhiteSpace(json)) return 0;
         var imported = JsonSerializer.Deserialize<List<VocabularyEntry>>(json, JsonOptions);
         if (imported is null || imported.Count == 0) return 0;
-        var count = 0;
-        lock (_gate)
+        var count = _database.Write(db =>
         {
-            foreach (var sourceEntry in imported)
+            var books = db.Books().ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
+            var added = 0;
+            foreach (var source in imported)
             {
-                var entry = sourceEntry with { NotebookId = ResolveNotebookId(sourceEntry.NotebookId) };
-                if (string.IsNullOrWhiteSpace(entry.Headword)) continue;
-                var idx = _store.Entries.FindIndex(e => e.NotebookId == entry.NotebookId &&
+                if (string.IsNullOrWhiteSpace(source.Headword)) continue;
+                var entry = source with { NotebookId = books.TryGetValue(source.NotebookId, out var book) ? book.Id : "default" };
+                var match = db.ByHead(entry.Headword).FirstOrDefault(e => e.NotebookId == entry.NotebookId &&
                     MatchesDictionary(e, entry.Headword, entry.TargetLanguage, entry.GetDictionaryContext()));
-                if (idx >= 0)
-                {
-                    _store.Entries[idx] = entry with { Id = _store.Entries[idx].Id };
-                }
-                else
-                {
-                    // Guard against duplicate IDs: an imported entry whose Id collides with a different
-                    // existing entry (same Id, different headword) would otherwise corrupt Id-based
-                    // lookups (SaveEntry/ToggleStar/DeleteEntry/SubmitReview all match by first Id found).
-                    var toAdd = _store.Entries.Any(e => e.Id == entry.Id)
-                        ? entry with { Id = $"voc_{Guid.NewGuid():N}"[..16] }
-                        : entry;
-                    _store.Entries.Add(toAdd);
-                }
-                count++;
+                if (match is not null) entry = entry with { Id = match.Id };
+                else if (db.Number("SELECT COUNT(*) FROM cards WHERE id=$p0", entry.Id) != 0)
+                    entry = entry with { Id = $"voc_{Guid.NewGuid():N}"[..16] };
+                db.SaveCard(entry);
+                added++;
             }
-            if (count > 0) PersistLocked();
-        }
+            return added;
+        });
         if (count > 0) Changed?.Invoke(this, EventArgs.Empty);
         return count;
-    }
-
-    private VocabularyStoreSnapshot LoadOrInitialize()
-    {
-        try
-        {
-            if (File.Exists(_storagePath))
-            {
-                var json = File.ReadAllText(_storagePath, Encoding.UTF8);
-                var loaded = JsonSerializer.Deserialize<VocabularyStoreSnapshot>(json, JsonOptions);
-                if (loaded is { Notebooks.Count: > 0 })
-                {
-                    var ids = loaded.Notebooks.Select(n => n.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    for (var i = 0; i < loaded.Entries.Count; i++)
-                        if (!ids.Contains(loaded.Entries[i].NotebookId))
-                            loaded.Entries[i] = loaded.Entries[i] with { NotebookId = "default" };
-                    return loaded;
-                }
-            }
-        }
-        catch
-        {
-        }
-
-        var seeded = VocabularySeeder.CreateDefaultSeededStore();
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(_storagePath)!);
-            File.WriteAllText(_storagePath, JsonSerializer.Serialize(seeded, JsonOptions), Encoding.UTF8);
-        }
-        catch
-        {
-        }
-        return seeded;
-    }
-
-    private void PersistLocked()
-    {
-        try
-        {
-            WriteSnapshot(_store);
-        }
-        catch
-        {
-        }
-    }
-
-    private void WriteSnapshot(VocabularyStoreSnapshot snapshot)
-    {
-        var dir = Path.GetDirectoryName(_storagePath);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-        var tempPath = _storagePath + ".tmp";
-        File.WriteAllText(tempPath, JsonSerializer.Serialize(snapshot, JsonOptions), Encoding.UTF8);
-        File.Move(tempPath, _storagePath, overwrite: true);
     }
 }

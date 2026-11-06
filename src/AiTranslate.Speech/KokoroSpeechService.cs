@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Text;
 using KokoroSharp;
 using KokoroSharp.Core;
-using KokoroSharp.Processing;
 using Microsoft.ML.OnnxRuntime;
 
 namespace AiTranslate.Speech;
@@ -21,8 +20,9 @@ public sealed partial class KokoroSpeechService : ISpeechSynthesisService
     private readonly string _modelDirectory;
     private readonly object _modelGate = new();
     private Task<bool>? _modelLoad;
-    private volatile KokoroTTS? _kokoro;
+    private volatile KokoroAudio? _kokoro;
     private volatile bool _disposed;
+    private static readonly object VoiceLoading = new();
 
     public bool IsKokoroModelLoaded => _kokoro is not null;
     public string EngineStatus { get; private set; } = "等待加载离线语音模型";
@@ -77,9 +77,27 @@ public sealed partial class KokoroSpeechService : ISpeechSynthesisService
         }
     }
 
+    public async Task PreparePronunciationAsync(string text, SpeechAccent accent, string? ipa, float speed, string? voiceId,
+        CancellationToken token)
+    {
+        Task<bool>? preload;
+        lock (_modelGate) preload = _modelLoad;
+        if (string.IsNullOrWhiteSpace(text) || text.Length > 48 || preload is null || _disposed) return;
+        try
+        {
+            if (await preload.WaitAsync(token).ConfigureAwait(false) && _kokoro is { } engine)
+                await Task.Run(() => engine.Prepare(FormatKokoroIpaInput(text, ipa), ResolveKokoroVoice(accent, voiceId),
+                    Math.Clamp(speed, .5f, 1.8f), Idle, token), token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex) { Debug.WriteLine(ex); } // Playback has its own system-voice fallback.
+
+        bool Idle() { lock (_speechGate) return !_disposed && _reading is null; }
+    }
+
     private bool LoadBundledModel()
     {
-        KokoroTTS? engine = null;
+        KokoroAudio? engine = null;
         try
         {
             if (_disposed) return false;
@@ -91,7 +109,11 @@ public sealed partial class KokoroSpeechService : ISpeechSynthesisService
                 return false;
             }
             engine = LoadKokoroFromPath(model);
-            WireKokoroCallbacks(engine);
+            // Loading weights alone leaves the tokenizer and the first ONNX run on the first click.
+            // An early reading does that work itself rather than waiting behind a warm-up clip.
+            bool warmUp;
+            lock (_speechGate) warmUp = _reading is null;
+            if (warmUp && !_disposed) engine.WarmUp(ResolveKokoroVoice(SpeechAccent.AmericanEnglish, null));
             lock (_modelGate)
             {
                 if (_disposed) return false;
@@ -113,14 +135,14 @@ public sealed partial class KokoroSpeechService : ISpeechSynthesisService
         }
     }
 
-    private static KokoroTTS LoadKokoroFromPath(string modelPath)
+    private static KokoroAudio LoadKokoroFromPath(string modelPath)
     {
         var voicesDir = Path.Combine(AppContext.BaseDirectory, "voices");
-        if (Directory.Exists(voicesDir) && KokoroVoiceManager.Voices.Count == 0)
-            KokoroVoiceManager.LoadVoicesFromPath(voicesDir);
+        lock (VoiceLoading)
+            if (KokoroVoiceManager.Voices.Count == 0) KokoroVoiceManager.LoadVoicesFromPath(voicesDir);
 
         using var sessionOptions = CreateOptimalSessionOptions();
-        return KokoroTTS.LoadModel(modelPath, sessionOptions: sessionOptions);
+        return new KokoroAudio(modelPath, sessionOptions);
     }
 
     private static SessionOptions CreateOptimalSessionOptions()
@@ -198,15 +220,8 @@ public sealed partial class KokoroSpeechService : ISpeechSynthesisService
             SpeechAccent.Japanese => "jf_alpha",
             _ => "af_heart"
         };
-        var targetId = string.IsNullOrWhiteSpace(preferredVoiceId) ? defaultId : preferredVoiceId;
-        try
-        {
-            return KokoroVoiceManager.GetVoice(targetId);
-        }
-        catch
-        {
-            return KokoroVoiceManager.Voices.First();
-        }
+        return KokoroVoiceManager.Voices.FirstOrDefault(v => string.Equals(v.Name, preferredVoiceId, StringComparison.OrdinalIgnoreCase))
+            ?? KokoroVoiceManager.GetVoice(defaultId);
     }
 
     private void UpdateStatus(string status)

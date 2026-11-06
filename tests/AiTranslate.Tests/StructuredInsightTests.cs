@@ -39,7 +39,8 @@ public sealed class StructuredInsightTests
         foreach (var type in Enum.GetValues<VocabularyItemType>())
         {
             var specs = EntryBlockCatalog.For(type);
-            Assert.Equal(EntryBlockCatalog.LiteralTranslation, specs[0]);
+            Assert.Equal(EntryBlockCatalog.PrimaryTranslation, specs[0]);
+            Assert.Equal(EntryBlockCatalog.LiteralTranslation, specs[1]);
             Assert.Equal(specs.Count, specs.Select(s => s.Block).Distinct().Count());
             Assert.Equal(specs.Count, specs.Select(s => s.Title).Distinct().Count());
             var blocks = specs.Select(s => s.Block).ToArray();
@@ -48,20 +49,20 @@ public sealed class StructuredInsightTests
                     blocks.Where(b => b is EntryBlock.Variants or EntryBlock.TranslationOptions));
             if (type.IsPassage())
             {
-                Assert.Equal(EntryBlock.Source, specs[1].Block);
+                Assert.Equal(EntryBlock.Source, specs[2].Block);
                 Assert.Equal(EntryBlockTier.Core, specs.Single(s => s.Block == EntryBlock.Source).Tier);
                 Assert.DoesNotContain(specs, s => s.Block is EntryBlock.Senses or EntryBlock.Inflections or EntryBlock.WordFormation or EntryBlock.Mistakes);
             }
             else
             {
-                Assert.Equal(EntryBlock.Senses, specs[1].Block);
-                Assert.Equal(EntryBlockTier.Core, specs[1].Tier);
+                Assert.Equal(EntryBlock.Senses, specs[2].Block);
+                Assert.Equal(EntryBlockTier.Core, specs[2].Tier);
                 Assert.Contains(EntryBlock.TranslationOptions, blocks);
                 Assert.DoesNotContain(specs, s => s.Block is EntryBlock.Source or EntryBlock.Decisions or EntryBlock.Structure or EntryBlock.Tone);
             }
         }
         var paragraph = EntryBlockCatalog.For(VocabularyItemType.Paragraph).Select(s => s.Block).ToList();
-        Assert.Equal([EntryBlock.LiteralTranslation, EntryBlock.Source, EntryBlock.Alignment], paragraph.Take(3));
+        Assert.Equal([EntryBlock.PrimaryTranslation, EntryBlock.LiteralTranslation, EntryBlock.Source, EntryBlock.Alignment], paragraph.Take(4));
         Assert.Contains(EntryBlock.Structure, EntryBlockCatalog.For(VocabularyItemType.Sentence).Select(s => s.Block));
         Assert.Contains(EntryBlock.LiteralMeaning, EntryBlockCatalog.For(VocabularyItemType.Idiom).Select(s => s.Block));
         Assert.DoesNotContain(EntryBlock.LiteralMeaning, EntryBlockCatalog.For(VocabularyItemType.Word).Select(s => s.Block));
@@ -120,11 +121,11 @@ public sealed class StructuredInsightTests
              "tone":{"formality":9,"tones":["客观","陈述","中性","多余"]},
              "morphemes":[{"part":"re-","meaning":"x"},{"part":"port","meaning":"y"}]}
             """);
-        Assert.Equal(["简洁"], entry.Variants.Select(v => v.Style));
+        Assert.Equal(["简洁", "简洁"], entry.Variants.Select(v => v.Style));
         Assert.Equal(["The report", "which was released yesterday", "that sales fell"], entry.Clauses.Select(c => c.Quote));
         Assert.Equal([0, 1, 1], entry.Clauses.Select(c => c.Depth));
         Assert.Equal(0, entry.Tone!.Formality);
-        Assert.Equal(3, entry.Tone.Tones.Count);
+        Assert.Equal(4, entry.Tone.Tones.Count);
         Assert.Empty(entry.Morphemes);
 
         const string paragraph = "Prices rose. Demand fell.\n\nAnalysts were surprised.";
@@ -135,7 +136,7 @@ public sealed class StructuredInsightTests
                           {"source":"Demand fell.","target":"需求下降。"},{"source":"Prices rose.","target":"回头重复"},
                           {"source":"Analysts were surprised.","target":"分析师感到意外。"}]}
             """);
-        Assert.Equal(4, passage.KeyPoints.Count);
+        Assert.Equal(5, passage.KeyPoints.Count);
         Assert.Equal(["Prices rose.", "Demand fell.", "Analysts were surprised."], passage.Alignment.Select(a => a.Source));
     }
 

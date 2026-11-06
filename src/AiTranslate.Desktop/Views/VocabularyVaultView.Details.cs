@@ -15,9 +15,10 @@ public sealed partial class VocabularyVaultView
     {
         if (Owner is not { } owner) return;
         var reading = Section();
+        reading.Classes.Add("dictionary-reading");
         var passage = entry.ItemType.IsPassage();
         // Passages show the source as their own block below; a giant headline would duplicate it.
-        if (!passage) reading.Children.Add(TextStyles.Selectable(entry.Headword, TextRole.Display));
+        if (!passage) reading.Children.Add(TextStyles.Selectable(entry.Headword, TextStyles.HeadwordRole(entry.Headword)));
         Window? dialog = null;
         var result = entry.ToDictionaryResult();
         using var lifetime = new CancellationTokenSource();
@@ -32,8 +33,8 @@ public sealed partial class VocabularyVaultView
             _lookup(query, sentence, TranslationTriggerSource.ManualInput, "", target);
         }
         var translations = new DictionaryTranslations();
+        DictionaryReadingText.EnableSelectionLookup(reading, (q, context) => Lookup(q, context, false));
         translations.ShowEntry(result, (q, context) => Lookup(q, context, true), reviews);
-        reading.Children.Add(translations);
         var accent = PhonicsAudioBar.SourceAccent(entry.SourceLanguage);
         if (!string.IsNullOrWhiteSpace(entry.Pronunciation)) reading.Children.Add(TextStyles.Create(entry.Pronunciation, TextRole.Phonetic));
         if (PhonicsAudioBar.HasEnglishAudio(result) && result.ItemType == VocabularyItemType.Word)
@@ -43,16 +44,18 @@ public sealed partial class VocabularyVaultView
                 entry.UsPhonetic, entry.UkPhonetic, entry.ContextSentence));
         else if (accent is { } voice)
             reading.Children.Add(PhonicsAudioBar.CreateSentenceReadButton(_speech, _settings, entry.Headword, "朗读原文", voice));
+        reading.Children.Add(translations);
 
         var context = $"{entry.ContextSentence}\n{entry.ContextTranslation}".Trim();
         if (context.Length > 0 && context != entry.Headword)
         {
             var pair = new StackPanel { Spacing = AppTheme.Space.XXS };
+            pair.Children.Add(TextStyles.Create("收录时的语境", TextRole.Label));
             if (!string.IsNullOrWhiteSpace(entry.ContextSentence))
                 pair.Children.Add(TextStyles.Selectable(entry.ContextSentence, TextRole.ExampleSource));
             if (!string.IsNullOrWhiteSpace(entry.ContextTranslation))
                 pair.Children.Add(RichText.Create(entry.ContextTranslation, TextRole.ExampleTarget));
-            reading.Children.Add(StudioUi.CreateInfoTile("收录时的语境", pair, "format-quote-close", AppTheme.TextSecondary));
+            reading.Children.Add(RichBlocks.Quote(pair));
         }
         // The notebook renders through the same block pipeline as a live lookup, so both read identically.
         var details = new DictionaryDetails(_speech, _settings, Lookup, reviews: reviews);
@@ -156,7 +159,13 @@ public sealed partial class VocabularyVaultView
         {
             var button = StudioUi.CreateSecondaryButton("refresh", $"{label} · {SpacedRepetitionScheduler.FormatInterval(interval)}", () =>
             {
-                var updated = _service.SubmitReview(entry.Id, rating);
+                VocabularyEntry updated;
+                try { updated = _service.SubmitReview(entry.Id, rating); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    _setStatus($"复习记录保存失败。{ex.Message}");
+                    return;
+                }
                 RenderProgress(panel, updated);
                 _setStatus($"已记录「{entry.Headword}」的复习，下次复习 {updated.NextReviewAt.ToLocalTime():MM-dd HH:mm}");
             });

@@ -10,7 +10,7 @@ public sealed partial class AiDictionaryService
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var gaps = entry.MissingUsageExamples().Take(8).ToArray();
+        var gaps = entry.MissingUsageExamples().ToArray();
         if (gaps.Length == 0) return entry;
         var started = DateTime.UtcNow.Ticks;
         var transport = transportFactory() ?? throw new AiException("请先配置 AI 引擎，再补全例句。");
@@ -71,6 +71,9 @@ public sealed partial class AiDictionaryService
     {
         token.ThrowIfCancellationRequested();
         updated = updated with { Origin = origin };
+        if (origin == DictionaryResultOrigin.Supplemented && updated.Processing is { } state)
+            updated = WithReviewSync(original, updated with { Processing = state with { Review = DictionaryStageState.Invalidated,
+                ReviewedContentHash = "", Issues = [], SectionChecks = [], Message = "" } });
         var revision = started;
         if (original.CacheStamp is { } stamp && cache is not null)
         {
