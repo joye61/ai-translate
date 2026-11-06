@@ -16,7 +16,7 @@ internal sealed class DictionaryDisclosures
         Control details)
     {
         var key = (block, group, ordinal);
-        var icon = new MdiIcon("chevron-down", 16, AppTheme.TextSecondary);
+        var icon = new FontAwesomeIcon("chevron-down", 16, AppTheme.TextSecondary);
         var caption = TextStyles.Create(label, TextRole.FieldLabel, wrap: false);
         caption.VerticalAlignment = VerticalAlignment.Center;
         var button = new Button

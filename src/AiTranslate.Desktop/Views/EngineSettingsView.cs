@@ -109,7 +109,7 @@ public sealed class EngineSettingsView : UserControl
 
         var speechStatus = TextStyles.Create(_speechService.EngineStatus, TextRole.Secondary);
 
-        var saveBtn = StudioUi.CreatePrimaryButton("content-save", "保存翻译与语音设置", () =>
+        var saveBtn = StudioUi.CreatePrimaryButton("floppy-disk", "保存翻译与语音设置", () =>
         {
             var provider = (_providerCombo.SelectedItem as AiProviderInfo) ?? AiProviders.All[0];
             var usVoice = (_usVoiceCombo.SelectedItem as KokoroSpeakerProfile)?.VoiceId ?? "af_heart";
@@ -128,7 +128,7 @@ public sealed class EngineSettingsView : UserControl
             _setStatus($"已保存设置：AI [{provider.Name}] · 美音 [{usVoice}] · 英音 [{ukVoice}]");
         });
 
-        var loadVoice = StudioUi.CreateSecondaryButton("waveform", "加载离线模型", () =>
+        var loadVoice = StudioUi.CreateSecondaryButton("wave-square", "加载离线模型", () =>
         {
             _ = _speechService.EnsureKokoroModelReadyAsync();
         });
@@ -147,7 +147,7 @@ public sealed class EngineSettingsView : UserControl
             Spacing = AppTheme.Space.M,
             Children =
             {
-                StudioUi.CreateSectionHeader("sparkles", "翻译引擎", null, AppTheme.Hues.Coral),
+                StudioUi.CreateSectionHeader("wand-magic-sparkles", "翻译引擎", null, AppTheme.Hues.Coral),
                 Field("接口地址 Base URL", _baseUrlBox),
                 Field("模型 Model ID", _modelIdBox),
                 Field("API Key", _apiKeyBox)
@@ -159,7 +159,7 @@ public sealed class EngineSettingsView : UserControl
             Spacing = AppTheme.Space.M,
             Children =
             {
-                StudioUi.CreateSectionHeader("account-voice", ISpeechSynthesisService.DisplayName, null, AppTheme.Hues.Violet),
+                StudioUi.CreateSectionHeader("microphone-lines", ISpeechSynthesisService.DisplayName, null, AppTheme.Hues.Violet),
                 speechStatus,
                 Field("美式发音人", _usVoiceCombo),
                 Field("英式发音人", _ukVoiceCombo),
@@ -180,10 +180,10 @@ public sealed class EngineSettingsView : UserControl
         };
         var hotkeys = new[]
         {
-            ("translate", "呼出工作台", current.ShowWindowHotkey.ToString()),
-            ("cursor-text", "划词翻译", current.SelectionTranslateHotkey.ToString()),
-            ("crop-free", "截图翻译", current.ScreenshotTranslateHotkey.ToString()),
-            ("clipboard-text-outline", "剪贴板翻译", current.ClipboardTranslateHotkey.ToString())
+            ("language", "呼出工作台", current.ShowWindowHotkey.ToString()),
+            ("i-cursor", "划词翻译", current.SelectionTranslateHotkey.ToString()),
+            ("crop-simple", "截图翻译", current.ScreenshotTranslateHotkey.ToString()),
+            ("paste", "剪贴板翻译", current.ClipboardTranslateHotkey.ToString())
         };
         foreach (var (icon, label, shortcut) in hotkeys) shortcuts.Children.Add(ShortcutRow(icon, label, shortcut));
         var hotkeysCard = StudioUi.CreateBentoCard(new StackPanel
@@ -191,7 +191,7 @@ public sealed class EngineSettingsView : UserControl
             Spacing = AppTheme.Space.M,
             Children =
             {
-                StudioUi.CreateSectionHeader("keyboard-outline", "全局快捷键", null, AppTheme.Hues.Sky),
+                StudioUi.CreateSectionHeader("regular/keyboard", "全局快捷键", null, AppTheme.Hues.Sky),
                 shortcuts
             }
         });
@@ -233,7 +233,7 @@ public sealed class EngineSettingsView : UserControl
             {
                 ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
                 ColumnSpacing = AppTheme.Space.S + 2,
-                Children = { new MdiIcon(icon, 16, AppTheme.TextSecondary) { VerticalAlignment = VerticalAlignment.Center }, name, keycap }
+                Children = { new FontAwesomeIcon(icon, 16, AppTheme.TextSecondary) { VerticalAlignment = VerticalAlignment.Center }, name, keycap }
             }
         };
     }

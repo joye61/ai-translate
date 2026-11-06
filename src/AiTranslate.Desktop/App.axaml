@@ -1,4 +1,4 @@
-<Application xmlns="https://github.com/avaloniaui"
+﻿<Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="using:AiTranslate.Desktop"
              x:Class="AiTranslate.Desktop.App"
@@ -16,7 +16,18 @@
                     <SolidColorBrush x:Key="ComboBoxBorderBrushPressed" Color="#FFC9BFB2" />
                     <SolidColorBrush x:Key="ComboBoxBackgroundBorderBrushFocused" Color="#FFFF7A59" />
                     <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#FFFFFFFF" />
-                    <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="#FFEDE8E1" />
+                    <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="#FFDDD5CB" />
+                    <!-- Dropdown rows: quiet warm hover, soft coral selection instead of Fluent's saturated accent fill. -->
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundPointerOver" Color="#FFF4F0EB" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundPressed" Color="#FFE9E3DB" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelected" Color="#1FFF7A59" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedUnfocused" Color="#1FFF7A59" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPointerOver" Color="#2BFF7A59" />
+                    <SolidColorBrush x:Key="ComboBoxItemBackgroundSelectedPressed" Color="#2BFF7A59" />
+                    <SolidColorBrush x:Key="ComboBoxItemForegroundSelected" Color="#FFD6482A" />
+                    <SolidColorBrush x:Key="ComboBoxItemForegroundSelectedUnfocused" Color="#FFD6482A" />
+                    <SolidColorBrush x:Key="ComboBoxItemForegroundSelectedPointerOver" Color="#FFD6482A" />
+                    <SolidColorBrush x:Key="ComboBoxItemForegroundSelectedPressed" Color="#FFD6482A" />
                     <SolidColorBrush x:Key="TextControlBorderBrush" Color="#FFDDD5CB" />
                     <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="#FFC9BFB2" />
                     <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="#FFFF7A59" />
@@ -43,7 +54,9 @@
                     <SolidColorBrush x:Key="MenuFlyoutItemKeyboardAcceleratorTextForegroundPressed" Color="#FF5E564D" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
-            <Thickness x:Key="ComboBoxItemThemePadding">16,5,16,7</Thickness>
+            <Thickness x:Key="ComboBoxItemThemePadding">10,0</Thickness>
+            <Thickness x:Key="ComboBoxDropdownBorderPadding">4</Thickness>
+            <CornerRadius x:Key="OverlayCornerRadius">12</CornerRadius>
             <Thickness x:Key="MenuIconPresenterMargin">0,0,10,0</Thickness>
             <Thickness x:Key="MenuInputGestureTextMargin">32,0,2,0</Thickness>
             <Thickness x:Key="MenuFlyoutScrollerMargin">0</Thickness>
@@ -125,13 +138,13 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Opacity" Value="0.6" />
         </Style>
-        <Style Selector="Button.compact local|MdiIcon">
+        <Style Selector="Button.compact local|FontAwesomeIcon">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.TextSecondary}" />
         </Style>
         <Style Selector="Button.compact TextBlock">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.TextSecondary}" />
         </Style>
-        <Style Selector="Button.compact:pointerover local|MdiIcon">
+        <Style Selector="Button.compact:pointerover local|FontAwesomeIcon">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.TextPrimary}" />
         </Style>
         <Style Selector="Button.compact:pointerover TextBlock">
@@ -164,26 +177,26 @@
             <Setter Property="BorderBrush" Value="{x:Static local:AppTheme.BorderStrong}" />
         </Style>
 
-        <Style Selector="Button.speech local|MdiIcon">
+        <Style Selector="Button.speech local|FontAwesomeIcon">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.TextSecondary}" />
         </Style>
         <Style Selector="Button.speech.preparing /template/ ContentPresenter#PART_ContentPresenter, Button.speech.playing /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{x:Static local:AppTheme.AccentSoft}" />
             <Setter Property="BorderBrush" Value="{x:Static local:AppTheme.Accent}" />
         </Style>
-        <Style Selector="Button.speech.preparing local|MdiIcon, Button.speech.playing local|MdiIcon">
+        <Style Selector="Button.speech.preparing local|FontAwesomeIcon, Button.speech.playing local|FontAwesomeIcon">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.AccentBright}" />
         </Style>
-        <Style Selector="Button.caption local|MdiIcon">
+        <Style Selector="Button.caption local|FontAwesomeIcon">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.TextPrimary}" />
         </Style>
         <Style Selector="Button.caption-close:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.caption-close:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{x:Static local:AppTheme.Danger}" />
         </Style>
-        <Style Selector="Button.caption-close:pointerover local|MdiIcon, Button.caption-close:pressed local|MdiIcon">
+        <Style Selector="Button.caption-close:pointerover local|FontAwesomeIcon, Button.caption-close:pressed local|FontAwesomeIcon">
             <Setter Property="Foreground" Value="{x:Static local:AppTheme.CardBg}" />
         </Style>
-        <Style Selector="StackPanel.traffic-lights:not(:pointerover):not(:focus-within) local|MdiIcon">
+        <Style Selector="StackPanel.traffic-lights:not(:pointerover):not(:focus-within) local|FontAwesomeIcon">
             <Setter Property="Opacity" Value="0" />
         </Style>
         <Style Selector="StackPanel.traffic-lights Button:pointerover /template/ ContentPresenter#PART_ContentPresenter, StackPanel.traffic-lights Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
@@ -257,7 +270,7 @@
         <Style Selector="MenuFlyoutPresenter MenuItem:checked:toggle /template/ ContentControl#PART_ToggleIconPresenter">
             <Setter Property="Content">
                 <Template>
-                    <local:MdiIcon IconName="check" IconSize="16" Foreground="{x:Static local:AppTheme.AccentBright}" />
+                    <local:FontAwesomeIcon IconName="check" IconSize="16" Foreground="{x:Static local:AppTheme.AccentBright}" />
                 </Template>
             </Setter>
         </Style>
@@ -265,6 +278,82 @@
             <Setter Property="Background" Value="{x:Static local:AppTheme.BorderSubtle}" />
             <Setter Property="Height" Value="1" />
             <Setter Property="Margin" Value="10,5" />
+        </Style>
+
+        <!-- Dropdown lists: rounded card, rounded rows with room to breathe. The popup border sets its own
+             radius in the template, so it is overridden through the open-state selector. -->
+        <Style Selector="ComboBox:dropdownopen /template/ Border#PopupBorder">
+            <Setter Property="CornerRadius" Value="12" />
+        </Style>
+        <Style Selector="ComboBoxItem">
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="MinHeight" Value="34" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,1" />
+            <Setter Property="FontSize" Value="13" />
+        </Style>
+
+        <!-- Notebook entry rows: the whole row lifts on hover; the move/delete icons stay at the row's end. -->
+        <Style Selector="Border.entry-row">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.12" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.entry-row:pointerover, Border.entry-row.menu-open">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.InputBg}" />
+        </Style>
+        <Style Selector="Button.row-open:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.row-open:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.row-open:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.AccentSoft}" />
+        </Style>
+        <Style Selector="Button.row-action local|FontAwesomeIcon">
+            <Setter Property="Foreground" Value="{x:Static local:AppTheme.TextMuted}" />
+        </Style>
+        <Style Selector="Button.row-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.HoverBg}" />
+        </Style>
+        <Style Selector="Button.row-action:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.PressedBg}" />
+        </Style>
+        <Style Selector="Button.row-action:pointerover local|FontAwesomeIcon, Button.row-action:focus-visible local|FontAwesomeIcon">
+            <Setter Property="Foreground" Value="{x:Static local:AppTheme.TextPrimary}" />
+        </Style>
+        <Style Selector="Button.row-action.destructive:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.row-action.destructive:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.DangerSoft}" />
+        </Style>
+        <Style Selector="Button.row-action.destructive:pointerover local|FontAwesomeIcon, Button.row-action.destructive:focus-visible local|FontAwesomeIcon">
+            <Setter Property="Foreground" Value="{x:Static local:AppTheme.Danger}" />
+        </Style>
+
+        <Style Selector="Button.danger:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.DangerHover}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.danger:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.DangerPressed}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+
+        <!-- Review answers: neutral card that takes on its rating hue when pointed at. -->
+        <Style Selector="Button.answer.good:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.answer.good:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.EmeraldSoft}" />
+            <Setter Property="BorderBrush" Value="{x:Static local:AppTheme.Emerald}" />
+        </Style>
+        <Style Selector="Button.answer.hard:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.answer.hard:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.AmberSoft}" />
+            <Setter Property="BorderBrush" Value="{x:Static local:AppTheme.Amber}" />
+        </Style>
+        <Style Selector="Button.answer.again:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.answer.again:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{x:Static local:AppTheme.DangerSoft}" />
+            <Setter Property="BorderBrush" Value="{x:Static local:AppTheme.Danger}" />
+        </Style>
+        <Style Selector="Button.answer:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="RenderTransform" Value="scale(0.985)" />
         </Style>
 
         <!-- List rows: neutral hover, quiet accent-soft selection (same language as the active nav row). -->

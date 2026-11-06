@@ -29,7 +29,7 @@ public sealed partial class AiTranslationService
         if (_transport is null && !forceRefresh)
         {
             if (!BuiltInShowcaseLexicon.TryGet(sourceText, out var entry) || entry.TargetLanguage != language.Id)
-                throw new AiException("本地没有这条译文，请在「引擎与快捷键」中配置 AI 引擎。");
+                throw new AiException("本地没有这条译文，请在「应用设置」中配置 AI 引擎。");
             translation = entry.PrimaryTranslation;
         }
         else translation = await TranslateAsync().ConfigureAwait(false);

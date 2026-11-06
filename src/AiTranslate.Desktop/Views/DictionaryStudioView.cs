@@ -15,7 +15,6 @@ namespace AiTranslate.Desktop.Views;
 
 public sealed class DictionaryStudioView : UserControl
 {
-    private const double ReadingWidth = 760;
     private readonly IAiDictionaryService _dictionaryService;
     private readonly IVocabularyService _vocabularyService;
     private readonly ISpeechSynthesisService _speech;
@@ -88,7 +87,6 @@ public sealed class DictionaryStudioView : UserControl
             Height = 28, VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false, Background = AppTheme.WindowFadeBottom,
             Margin = new Thickness(0, 0, 12, 0)
         };
-        _composer.MaxWidth = ReadingWidth;
         _composer.Margin = new Thickness(AppTheme.Space.XXL, 0, AppTheme.Space.XXL, AppTheme.Space.L);
         Grid.SetRow(_composer, 1);
         Content = new Grid
@@ -163,7 +161,7 @@ public sealed class DictionaryStudioView : UserControl
                 else
                 {
                     page.ShowError(ex.Message);
-                    page.ShowActions(StudioUi.CreateSecondaryButton("refresh", "重新查询",
+                    page.ShowActions(StudioUi.CreateSecondaryButton("arrows-rotate", "重新查询",
                         () => _ = RunLookupAsync(query, contextSentence, source, sourceTitle, language, linked: linked)));
                     _setStatus("翻译未完成");
                 }
@@ -212,10 +210,7 @@ public sealed class DictionaryStudioView : UserControl
         _current = null;
         _collection = null;
         var page = new DictionaryResultView(query, language, _speech, _settings, LookupRelated, _history.Count > 0 ? GoBack : null,
-            context, disclosures)
-        {
-            MaxWidth = ReadingWidth
-        };
+            context, disclosures);
         page.BlockReviews.Requested += block =>
         {
             if (_current is { } current && ReferenceEquals(_scroll.Content, page))
@@ -291,16 +286,26 @@ public sealed class DictionaryStudioView : UserControl
         if (accent is { } voice && (result.ItemType.IsPassage() || voice != SpeechAccent.AmericanEnglish))
             tools.Children.Add(SpeechPlaybackButton.Create(click => StudioUi.CreateIconButton("volume-high", "朗读原文", click),
                 playback => PhonicsAudioBar.SpeakSentence(_speech, _settings, result.SourceText, voice, playback), page.SourcePlayback));
-        tools.Children.Add(StudioUi.CreateIconButton("refresh", "重新用 AI 翻译（忽略缓存）",
+        tools.Children.Add(StudioUi.CreateIconButton("arrows-rotate", "重新用 AI 翻译（忽略缓存）",
             () => _ = RunLookupAsync(result.SourceText, contextSentence, source, sourceTitle, result.TargetLanguage, result)));
-        var extras = new WrapPanel { ItemSpacing = AppTheme.Space.XXS, LineSpacing = AppTheme.Space.XXS, HorizontalAlignment = HorizontalAlignment.Right };
+        var extras = new WrapPanel
+        {
+            ItemSpacing = AppTheme.Space.S, LineSpacing = AppTheme.Space.S,
+            VerticalAlignment = VerticalAlignment.Center
+        };
         var currentReading = _current;
         var resumeExtension = result.Processing?.CanResumeExtension == true;
         if (result.Processing?.Review is not (DictionaryStageState.Completed or DictionaryStageState.Unresolved) || resumeExtension)
         {
             var label = resumeExtension ? "补全并核对" : "核对整条";
-            var review = StudioUi.CreateCompactButton("sparkles", label,
+            var review = StudioUi.CreateCompactButton("wand-magic-sparkles", label,
                 () => _ = SupplementAsync(page, currentReading, wholeEntry: true));
+            review.Background = AppTheme.InputBg;
+            review.CornerRadius = new CornerRadius(AppTheme.Radius.Pill);
+            review.Padding = new Thickness(AppTheme.Space.M, AppTheme.Space.XS);
+            review.MinHeight = 32;
+            review.HorizontalContentAlignment = HorizontalAlignment.Center;
+            review.VerticalContentAlignment = VerticalAlignment.Center;
             ToolTip.SetTip(review, resumeExtension ? "继续补全学习解析，再核对主译与各栏内容是否一致" : "核对主译与各栏内容是否一致");
             extras.Children.Add(review);
         }
@@ -310,7 +315,7 @@ public sealed class DictionaryStudioView : UserControl
             var missing = result.MissingUsageExamples().Count();
             if (missing > 0)
             {
-                var fill = StudioUi.CreateCompactButton("format-quote-close", $"补全例句 · {missing}",
+                var fill = StudioUi.CreateCompactButton("quote-left", $"补全例句 · {missing}",
                     () => _ = SupplementAsync(page, reading));
                 ToolTip.SetTip(fill, "为所有缺双语例句的句型和搭配补充例句");
                 extras.Children.Add(fill);
@@ -318,7 +323,7 @@ public sealed class DictionaryStudioView : UserControl
         }
         page.ShowActions(tools, extras);
         _setStatus(result.NotebookSyncPending ? BlockReviewActions.PendingSyncStatus :
-            DictionaryResultView.QualityStatus(result) ?? "翻译完成");
+            DictionaryResultView.CompletionStatus(result) ?? "翻译完成");
         if (pronounce && _settings.Current.AutoPronounceOnLookup && accent is { } autoVoice)
             _ = _speech.SpeakAsync(result.SourceText, autoVoice, result.UsPhonetic, _settings.Current.SpeechSpeed,
                 autoVoice == SpeechAccent.AmericanEnglish ? _settings.Current.PreferredUsVoiceId : null, playback: page.SourcePlayback);
@@ -346,7 +351,8 @@ public sealed class DictionaryStudioView : UserControl
             if (_lookup != request) return;
             if (ReferenceEquals(result, reading.Entry))
             {
-                _setStatus(wholeEntry ? DictionaryResultView.QualityStatus(result) ?? "当前版本已核对" :
+                if (wholeEntry) page.ShowEntry(result, complete: true);
+                _setStatus(wholeEntry ? DictionaryResultView.CompletionStatus(result) ?? "当前版本已核对" :
                     block is null ? "本轮未发现可补充的例句" : BlockReviewActions.ResultStatus(title!, result, changed: false));
                 return;
             }

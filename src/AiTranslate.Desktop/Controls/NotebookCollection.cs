@@ -11,7 +11,7 @@ namespace AiTranslate.Desktop.Controls;
 internal sealed class NotebookBookmarkButton : Button
 {
     private readonly TextBlock _label = TextStyles.Create("", TextRole.Label, wrap: false);
-    private readonly MdiIcon _icon = new() { IconSize = 16 };
+    private readonly FontAwesomeIcon _icon = new() { IconSize = 16 };
     private bool _saved;
 
     protected override Type StyleKeyOverride => typeof(Button);
@@ -43,7 +43,7 @@ internal sealed class NotebookBookmarkButton : Button
         Background = saved ? AppTheme.CardElevatedBg : AppTheme.BrandGradient;
         BorderBrush = saved ? AppTheme.BorderStrong : Brushes.Transparent;
         _icon.Foreground = _label.Foreground = saved ? AppTheme.TextSecondary : AppTheme.CardBg;
-        _icon.IconName = saved ? "bookmark-minus-outline" : "bookmark-plus-outline";
+        _icon.IconName = saved ? "bookmark" : "regular/bookmark";
         _label.Text = saved ? "取消收录" : "加入生词表";
         AutomationProperties.SetName(this, _label.Text);
         ToolTip.SetTip(this, saved ? "从当前生词本取消收录" : "将此词条加入当前生词表");
@@ -64,7 +64,17 @@ internal sealed class NotebookCollection : StackPanel
         _picker = new ComboBox
         {
             Classes = { "chip" }, MinWidth = 112, MaxWidth = 208, VerticalAlignment = VerticalAlignment.Center,
-            ItemTemplate = new FuncDataTemplate<VocabularyNotebook>((book, _) => TextStyles.Create(book?.Name, TextRole.Body, wrap: false)),
+            ItemTemplate = new FuncDataTemplate<VocabularyNotebook>((book, _) =>
+            {
+                var name = TextStyles.Create(book?.Name, TextRole.Body, wrap: false);
+                name.TextTrimming = TextTrimming.CharacterEllipsis;
+                Grid.SetColumn(name, 1);
+                return new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = AppTheme.Space.S,
+                    Children = { new FontAwesomeIcon("folder", 14, AppTheme.TextMuted), name }
+                };
+            }),
             SelectionBoxItemTemplate = new FuncDataTemplate<VocabularyNotebook>((book, _) =>
             {
                 var label = TextStyles.Create(book?.Name, TextRole.FieldLabel, wrap: false);
@@ -73,7 +83,7 @@ internal sealed class NotebookCollection : StackPanel
                 return new Grid
                 {
                     ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = AppTheme.Space.XS,
-                    Children = { new MdiIcon("notebook-outline", 14, AppTheme.TextSecondary), label }
+                    Children = { new FontAwesomeIcon("book", 14, AppTheme.TextSecondary), label }
                 };
             })
         };

@@ -34,7 +34,7 @@ internal sealed class DictionarySection : Border
         heading.Children.Add(_title);
         if (insight)
         {
-            var insightIcon = new MdiIcon("sparkles", 14, AppTheme.Insight) { VerticalAlignment = VerticalAlignment.Center };
+            var insightIcon = new FontAwesomeIcon("wand-magic-sparkles", 14, AppTheme.Insight) { VerticalAlignment = VerticalAlignment.Center };
             ToolTip.SetTip(insightIcon, "AI 按内容判断生成的深度解析");
             heading.Children.Add(insightIcon);
         }

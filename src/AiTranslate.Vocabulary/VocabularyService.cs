@@ -47,11 +47,6 @@ public sealed partial class VocabularyService : IVocabularyService
             .OrderByDescending(t => t.Phrase.Length).ThenBy(t => t.Phrase, StringComparer.Ordinal).Distinct().ToArray());
     }
 
-    public IReadOnlyList<string> GetAllTags() => _database.Read(db =>
-        db.Rows("SELECT value FROM cards, json_each(cards.payload,'$.Tags')", r => r.GetString(0))
-            .Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(t => t, StringComparer.OrdinalIgnoreCase).ToArray());
-
     public VocabularyEntry? FindByHeadword(string headword)
     {
         if (string.IsNullOrWhiteSpace(headword)) return null;
@@ -59,119 +54,51 @@ public sealed partial class VocabularyService : IVocabularyService
         return _database.Read(db => db.ByHead(word).FirstOrDefault(e => string.Equals(e.Headword, word, StringComparison.OrdinalIgnoreCase)));
     }
 
-    public IReadOnlyList<VocabularyEntry> QueryEntries(VocabularyQueryFilter filter, DateTimeOffset? now = null)
+    public IReadOnlyList<VocabularyEntry> QueryEntries(VocabularyQueryFilter filter)
     {
         ArgumentNullException.ThrowIfNull(filter);
-        var currentTime = now ?? DateTimeOffset.UtcNow;
         return _database.Read(db =>
         {
-            var conditions = new List<string>();
-            var parameters = new List<object?>();
-            void Filter(string comparison, object value)
-            {
-                conditions.Add(comparison + "$p" + parameters.Count);
-                parameters.Add(value);
-            }
-            if (!string.IsNullOrWhiteSpace(filter.NotebookId) && filter.NotebookId != "all")
-                Filter("book = ", FindNotebookId(db, filter.NotebookId) ?? filter.NotebookId);
-            if (filter.ItemType is { } kind) Filter("kind = ", (int)kind);
-            if (filter.Stage is { } stage) Filter("stage = ", (int)stage);
-            if (filter.OnlyStarred) conditions.Add("starred = 1");
-            if (filter.OnlyDue)
-            {
-                Filter("stage <> ", (int)MemoryStage.Mastered);
-                Filter("due <= ", currentTime.UtcTicks);
-            }
-            var clause = conditions.Count == 0 ? "" : "WHERE " + string.Join(" AND ", conditions);
-            IEnumerable<VocabularyEntry> query = db.Cards(clause + " ORDER BY rowid DESC", parameters.ToArray());
-            if (!string.IsNullOrWhiteSpace(filter.Tag))
-                query = query.Where(e => e.Tags.Any(t => string.Equals(t, filter.Tag, StringComparison.OrdinalIgnoreCase)));
-
-            if (!string.IsNullOrWhiteSpace(filter.SearchKeyword))
-            {
-                var kw = filter.SearchKeyword.Trim();
-                query = query.Where(e =>
-                    e.Headword.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-                    e.Translation.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-                    e.ContextSentence.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-                    e.MemoryMnemonic.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-                    e.EtymologyAndRoot.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-                    e.EtymologyNotes.Concat(e.CulturalNotes).Any(n => n.Title.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-                        n.Explanation.Contains(kw, StringComparison.OrdinalIgnoreCase)) ||
-                    e.Mnemonics.Any(m => m.Method.Contains(kw, StringComparison.OrdinalIgnoreCase) || m.Cue.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-                        m.Explanation.Contains(kw, StringComparison.OrdinalIgnoreCase)) ||
-                    e.UserPersonalNote.Contains(kw, StringComparison.OrdinalIgnoreCase) ||
-                    e.Tags.Any(t => t.Contains(kw, StringComparison.OrdinalIgnoreCase)));
-            }
-
+            var hasNotebook = !string.IsNullOrWhiteSpace(filter.NotebookId);
+            IEnumerable<VocabularyEntry> query = hasNotebook
+                ? db.Cards("WHERE book = $p0 ORDER BY rowid DESC", FindNotebookId(db, filter.NotebookId) ?? filter.NotebookId!)
+                : db.Cards("ORDER BY rowid DESC");
             query = filter.SortOrder switch
             {
-                VocabularySortOrder.NextReviewDue => query.OrderBy(e => e.NextReviewAt).ThenByDescending(e => e.Difficulty),
+                VocabularySortOrder.ReviewDue => query.OrderBy(e => e.NextReviewAt).ThenByDescending(e => e.Difficulty),
                 VocabularySortOrder.Alphabetical => query.OrderBy(e => e.Headword, StringComparer.OrdinalIgnoreCase),
-                VocabularySortOrder.MostLookedUp => query.OrderByDescending(e => e.LookupCount).ThenByDescending(e => e.UpdatedAt),
-                VocabularySortOrder.HighestDifficulty => query.OrderByDescending(e => e.Difficulty).ThenBy(e => e.StabilityDays),
-                VocabularySortOrder.LowestMastery => query.OrderBy(e => e.MasteryLevel).ThenBy(e => e.StabilityDays),
                 // RecentlyAdded must reflect creation time, not last-updated time, otherwise reviewing an
                 // old entry would incorrectly bump it to the top of a "recently added" list.
                 _ => query.OrderByDescending(e => e.CreatedAt)
             };
-
             return query.ToArray();
         });
     }
 
-    public IReadOnlyList<VocabularyEntry> GetDueQueue(string? notebookId = null, int maxCount = 50, DateTimeOffset? now = null)
+    public IReadOnlyList<VocabularyEntry> GetDueQueue(string notebookId, int maxCount = 50, DateTimeOffset? now = null)
     {
         var currentTime = now ?? DateTimeOffset.UtcNow;
-        var all = string.IsNullOrWhiteSpace(notebookId) || notebookId == "all";
-        var bookFilter = all ? "" : " AND book=$p4";
-        var clause = "WHERE stage<>$p0 AND due<=$p1" + bookFilter +
-            " ORDER BY (stage=$p2) DESC, due, starred DESC, rowid DESC LIMIT $p3";
-        object?[] values = [(int)MemoryStage.Mastered, currentTime.UtcTicks, (int)MemoryStage.Learning, Math.Max(1, maxCount)];
-        return _database.Read(db => db.Cards(clause, all ? values : [.. values, FindNotebookId(db, notebookId) ?? notebookId]));
+        const string clause = "WHERE book=$p4 AND stage<>$p0 AND due<=$p1 ORDER BY (stage=$p2) DESC, due, rowid DESC LIMIT $p3";
+        return _database.Read(db => db.Cards(clause, (int)MemoryStage.Mastered, currentTime.UtcTicks, (int)MemoryStage.Learning,
+            Math.Max(1, maxCount), FindNotebookId(db, notebookId) ?? notebookId));
     }
 
-    public VocabularyDashboardStats GetDashboardStats(DateTimeOffset? now = null)
+    public IReadOnlyList<VocabularyNotebookSummary> GetNotebookSummaries(DateTimeOffset? now = null)
     {
-        var currentTime = now ?? DateTimeOffset.UtcNow;
-        // "Today" must be the user's local calendar day, not the UTC day: computing the boundary
-        // from the UTC date would misclassify reviews done late at night (or early morning, for
-        // timezones ahead of UTC) as belonging to the wrong day.
-        var localNow = currentTime.ToLocalTime();
-        var todayStart = new DateTimeOffset(localNow.Date, localNow.Offset);
+        var currentTime = (now ?? DateTimeOffset.UtcNow).UtcTicks;
         return _database.Read(db =>
         {
-            // Statistics need scheduling fields only, even when a saved passage has a large reading payload.
-            var reviewedToday = (int)db.Number("SELECT COUNT(*) FROM review_logs WHERE reviewed >= $p0", todayStart.UtcTicks);
-            var byNotebook = db.Books().ToDictionary(n => n.Id, _ => 0, StringComparer.OrdinalIgnoreCase);
-            var byType = Enum.GetValues<VocabularyItemType>().ToDictionary(t => t, _ => 0);
-            var byStage = Enum.GetValues<MemoryStage>().ToDictionary(stage => stage, _ => 0);
-            var due = 0;
-            var starred = 0;
-            var active = 0;
-            double retention = 0;
-            var rows = db.Rows("SELECT book,kind,stage,due,starred,stability,last_review FROM cards", r => (
-                Book: r.GetString(0), Kind: (VocabularyItemType)r.GetInt32(1), Stage: (MemoryStage)r.GetInt32(2),
-                Due: r.GetInt64(3), Starred: r.GetBoolean(4), Stability: r.GetDouble(5),
-                Reviewed: r.IsDBNull(6) ? (DateTimeOffset?)null : new DateTimeOffset(r.GetInt64(6), TimeSpan.Zero)));
-            foreach (var row in rows)
-            {
-                byNotebook[row.Book]++;
-                byType[row.Kind] = byType.GetValueOrDefault(row.Kind) + 1;
-                byStage[row.Stage] = byStage.GetValueOrDefault(row.Stage) + 1;
-                if (row.Due <= currentTime.UtcTicks && row.Stage != MemoryStage.Mastered) due++;
-                if (row.Starred) starred++;
-                if (row.Stage == MemoryStage.New) continue;
-                active++;
-                retention += SpacedRepetitionScheduler.EstimateRetrievability(row.Stage, row.Reviewed, row.Stability, currentTime);
-            }
-            return new VocabularyDashboardStats(rows.Count, due, byStage[MemoryStage.New], byStage[MemoryStage.Learning],
-                byStage[MemoryStage.Reviewing], byStage[MemoryStage.Mastered], starred, reviewedToday,
-                active == 0 ? 100.0 : Math.Round(retention / active * 100.0, 1), byNotebook, byType);
+            // Scheduling columns only: a saved passage can carry a large payload.
+            var counts = db.Rows("SELECT book,COUNT(*),SUM(stage<>$p0 AND due<=$p1) FROM cards GROUP BY book",
+                r => (Book: r.GetString(0), Count: r.GetInt32(1), Due: r.IsDBNull(2) ? 0 : r.GetInt32(2)),
+                (int)MemoryStage.Mastered, currentTime).ToDictionary(r => r.Book, StringComparer.OrdinalIgnoreCase);
+            return db.Books().OrderByDescending(n => n.IsSystemDefault).ThenBy(n => n.CreatedAt)
+                .Select(n => counts.TryGetValue(n.Id, out var c) ? new VocabularyNotebookSummary(n, c.Count, c.Due)
+                    : new VocabularyNotebookSummary(n, 0, 0)).ToArray();
         });
     }
 
-    public VocabularyNotebook CreateNotebook(string name, string description, string iconName = "book-open-variant", string accentHex = "#3B82F6")
+    public VocabularyNotebook CreateNotebook(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         var trimmed = name.Trim();
@@ -185,9 +112,6 @@ public sealed partial class VocabularyService : IVocabularyService
             {
                 Id = $"nb_{Guid.NewGuid():N}"[..12],
                 Name = trimmed,
-                Description = description.Trim(),
-                IconName = iconName,
-                AccentColorHex = accentHex,
                 CreatedAt = DateTimeOffset.UtcNow
             };
             db.InsertBook(created);
@@ -203,8 +127,7 @@ public sealed partial class VocabularyService : IVocabularyService
         string notebookId = "default",
         string? contextSentence = null,
         TranslationTriggerSource source = TranslationTriggerSource.ManualInput,
-        string sourceTitle = "",
-        string userNote = "")
+        string sourceTitle = "")
     {
         ArgumentNullException.ThrowIfNull(result);
         var now = DateTimeOffset.UtcNow;
@@ -224,7 +147,6 @@ public sealed partial class VocabularyService : IVocabularyService
                 if (result.CacheStamp is { } stamp && stamp.Revision < current.DictionaryRevision)
                     return current;
                 var translation = string.IsNullOrWhiteSpace(result.PrimaryTranslation) ? current.Translation : result.PrimaryTranslation;
-                var mergedTags = current.Tags.Concat(result.SuggestedTags).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 saved = current with
                 {
                     DictionaryContext = result.LookupContext,
@@ -280,8 +202,6 @@ public sealed partial class VocabularyService : IVocabularyService
                     GrammarHighlights = result.GrammarHighlights.Count > 0 ? result.GrammarHighlights : current.GrammarHighlights,
                     ContextSentence = !string.IsNullOrWhiteSpace(contextSentence) ? contextSentence!.Trim() : current.ContextSentence,
                     ContextTranslation = !string.IsNullOrWhiteSpace(result.ContextMeaning) ? result.ContextMeaning! : current.ContextTranslation,
-                    UserPersonalNote = !string.IsNullOrWhiteSpace(userNote) ? userNote.Trim() : current.UserPersonalNote,
-                    Tags = mergedTags,
                     LookupCount = current.LookupCount + 1,
                     UpdatedAt = now
                 };
@@ -299,12 +219,10 @@ public sealed partial class VocabularyService : IVocabularyService
                     Translation = result.PrimaryTranslation,
                     NotebookId = notebookId,
                     DictionaryContext = result.LookupContext,
-                    UserPersonalNote = userNote.Trim(),
                     ContextSentence = contextSentence?.Trim() ?? (result.Examples.FirstOrDefault()?.SourceSentence ?? ""),
                     ContextTranslation = result.ContextMeaning ?? (result.Examples.FirstOrDefault()?.TranslatedSentence ?? ""),
                     CaptureSource = source,
                     SourceTitle = sourceTitle,
-                    Tags = result.SuggestedTags,
                     LookupCount = 1,
                     Stage = MemoryStage.New,
                     MasteryLevel = 0,
@@ -336,15 +254,26 @@ public sealed partial class VocabularyService : IVocabularyService
         return updated;
     }
 
-    public void ToggleStar(string entryId)
+    public VocabularyEntry MoveEntry(string entryId, string notebookId)
     {
-        var changed = _database.Write(db =>
+        var (result, changed) = _database.Write(db =>
         {
-            if (db.Card(entryId) is not { } card) return false;
-            db.SaveCard(card with { IsStarred = !card.IsStarred, UpdatedAt = DateTimeOffset.UtcNow });
-            return true;
+            var target = FindNotebookId(db, notebookId) ?? throw new InvalidOperationException("目标生词本已被删除，请重新选择。");
+            var entry = db.Card(entryId) ?? throw new InvalidOperationException("这个词条已被删除。");
+            if (entry.NotebookId == target) return (entry, false);
+            var twin = db.ByHead(entry.Headword).FirstOrDefault(e => e.Id != entry.Id && e.NotebookId == target &&
+                MatchesDictionary(e, entry.Headword, entry.TargetLanguage, entry.GetDictionaryContext()));
+            if (twin is not null)
+            {
+                db.Execute("DELETE FROM cards WHERE id=$p0", entry.Id);
+                return (twin, true);
+            }
+            var moved = entry with { NotebookId = target, UpdatedAt = DateTimeOffset.UtcNow };
+            db.SaveCard(moved);
+            return (moved, true);
         });
         if (changed) Changed?.Invoke(this, EventArgs.Empty);
+        return result;
     }
 
     public void DeleteEntry(string entryId)

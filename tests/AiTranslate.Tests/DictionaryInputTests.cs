@@ -144,7 +144,8 @@ public sealed class DictionaryInputTests
                     var enriched = reopened.FindByHeadword("draft");
                     Assert.NotNull(enriched);
                     Assert.Equal(saved.Id, enriched.Id);
-                    Assert.Equal("写作", Assert.Single(enriched.Tags));
+                    Assert.Equal("写作", Assert.Single(enriched.SuggestedTags));
+                    Assert.Empty(enriched.Tags);
                     Assert.Equal("Read the draft.", enriched.ContextSentence);
                     Assert.Equal("阅读器", enriched.SourceTitle);
                     Assert.Equal(preview.Senses, enriched.Senses);
@@ -307,7 +308,7 @@ public sealed class DictionaryInputTests
         view.GetVisualDescendants().OfType<SelectableTextBlock>().Where(b => b.IsEffectivelyVisible).Select(b => b.Text ?? b.Inlines?.Text).ToArray();
 
     [Theory]
-    [InlineData(1200, 760)]
+    [InlineData(1200, 1152)]
     [InlineData(788, 740)]
     public async Task TranslationAndSourceShareTheComposerReadingColumn(double workspaceWidth, double expectedWidth)
     {
@@ -790,6 +791,68 @@ public sealed class DictionaryInputTests
         });
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task WholeReviewReplacesOldFailureWithTheActualOutcome(bool completed)
+    {
+        await RunInStudio((window, view, dictionary, _) =>
+        {
+            string?[] VisibleText() => view.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? t.Inlines?.Text).ToArray();
+            var entry = new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡",
+                Processing = new() { Review = DictionaryStageState.Failed, Message = "上次审校失败" } };
+            view.DisplayResult(entry, TranslationTriggerSource.ManualInput, "");
+            window.UpdateLayout();
+            Assert.Contains("上次审校失败", VisibleText());
+            var button = view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == "核对整条");
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.False(button.IsEffectivelyEnabled);
+            Assert.DoesNotContain("上次审校失败", VisibleText());
+            var result = entry with { Processing = entry.Processing with
+            {
+                Review = completed ? DictionaryStageState.Completed : DictionaryStageState.Failed,
+                Message = completed ? "" : "整条核对未完成：AI 回复格式或字段不完整。已保留原内容，可重试。"
+            } };
+            dictionary.Supplement.SetResult(result);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Assert.DoesNotContain("上次审校失败", VisibleText());
+            Assert.Contains(completed ? "译文与现有解析已核对" : result.Processing.Message, VisibleText());
+            Assert.Equal(completed ? "译文与现有解析已核对" : result.Processing.Message, DictionaryResultView.CompletionStatus(result));
+            Assert.Equal(!completed, view.GetVisualDescendants().OfType<Button>()
+                .Any(b => b.IsEffectivelyVisible && AutomationProperties.GetName(b) == "核对整条"));
+            Assert.False(view.GetVisualDescendants().OfType<FlowingBorderEffect>().Single().IsVisible);
+        });
+    }
+
+    [Theory]
+    [InlineData(808, true)]
+    [InlineData(402, false)]
+    public async Task WholeReviewToolbarAlignsItsHintAndReflowsWithoutOverlap(double width, bool inline)
+    {
+        await RunInStudio((window, view, _, _) =>
+        {
+            window.Width = width;
+            view.Width = width;
+            view.DisplayResult(new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡" },
+                TranslationTriggerSource.ManualInput, "");
+            window.UpdateLayout();
+            var hint = view.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "单击下划线词语，或选中正文后右键查词");
+            var button = view.GetVisualDescendants().OfType<Button>().Single(b => AutomationProperties.GetName(b) == "核对整条");
+            var hintStart = hint.TranslatePoint(default, view)!.Value;
+            var buttonStart = button.TranslatePoint(default, view)!.Value;
+            if (inline)
+            {
+                Assert.InRange(Math.Abs(hintStart.Y + hint.Bounds.Height / 2 - buttonStart.Y - button.Bounds.Height / 2), 0, 1);
+                Assert.True(hintStart.X + hint.Bounds.Width <= buttonStart.X);
+            }
+            else Assert.True(buttonStart.Y >= hintStart.Y + hint.Bounds.Height,
+                $"Hint {hintStart}, {hint.Bounds}; button {buttonStart}, {button.Bounds}; view {view.Bounds}");
+            Assert.InRange(buttonStart.X + button.Bounds.Width, 0, view.Bounds.Width);
+        });
+    }
+
     [Fact]
     public async Task SendingADraftDuringBlockReviewSupersedesTheReview()
     {
@@ -960,7 +1023,7 @@ public sealed class DictionaryInputTests
     {
         await RunInStudio((window, view, _, vocabulary) =>
         {
-            var book = vocabulary.CreateNotebook("这个很长的生词本名称用来检查最小窗口下的收录操作", "");
+            var book = vocabulary.CreateNotebook("这个很长的生词本名称用来检查最小窗口下的收录操作");
             var result = new DictionaryEntryResult { SourceText = "bank", PrimaryTranslation = "河岸" };
             view.DisplayResult(result, TranslationTriggerSource.ManualInput, "");
             window.UpdateLayout();

@@ -18,10 +18,10 @@ public static class TestProgram
         var vocabTests = new VocabularyAndFsrsTests();
         vocabTests.FsrsScheduler_ProgressesFromNewToLearningReviewingAndMastered();
         vocabTests.FsrsScheduler_HardRatingDoesNotForceArtificialGrowthFloor();
-        vocabTests.VocabularyService_SeedsAndSupportsCrudFilterAndMultiFormatExport();
+        vocabTests.VocabularyService_StartsWithOnlyTheDefaultNotebookAndSupportsMultiFormatExport();
         vocabTests.VocabularyService_DefaultSortOrderUsesCreatedAtNotUpdatedAt();
         vocabTests.VocabularyService_ImportFromJson_AvoidsDuplicateIdCollisions();
-        vocabTests.VocabularyExportFormatter_AnkiTsv_SanitizesTabsAndNewlinesInTags();
+        vocabTests.VocabularyExportFormatter_AnkiTsv_SanitizesTabsAndNewlinesInFields();
 
         var pipelineTests = new TranslationPipelineTests();
         pipelineTests.TranslationLayout_GroupsParagraphLinesAndPreservesHeadings();
@@ -156,7 +156,7 @@ public sealed class VocabularyAndFsrsTests
         try
         {
             var service = new VocabularyService(tempFile);
-            var nb = service.CreateNotebook("排序测试专用词本", "");
+            var nb = service.CreateNotebook("排序测试专用词本");
 
             var now = DateTimeOffset.UtcNow;
             var olderWord = new VocabularyEntry
@@ -178,13 +178,18 @@ public sealed class VocabularyAndFsrsTests
             service.SaveEntry(olderWord);
             service.SaveEntry(newerWord);
 
-            // Starring the OLD word bumps its UpdatedAt well after the newer word's UpdatedAt,
+            // Reviewing the OLD word bumps its UpdatedAt well after the newer word's UpdatedAt,
             // but it must not jump ahead of the truly newer word in the default "recently added" order.
-            service.ToggleStar(olderWord.Id);
+            service.SubmitReview(olderWord.Id, ReviewRating.Good);
 
             var results = service.QueryEntries(new VocabularyQueryFilter { NotebookId = nb.Id });
             Assert.Equal("new-word", results[0].Headword);
             Assert.Equal("old-word", results[1].Headword);
+
+            var alphabetical = service.QueryEntries(new VocabularyQueryFilter { NotebookId = nb.Id, SortOrder = VocabularySortOrder.Alphabetical });
+            Assert.Equal(["new-word", "old-word"], alphabetical.Select(e => e.Headword));
+            var dueFirst = service.QueryEntries(new VocabularyQueryFilter { NotebookId = nb.Id, SortOrder = VocabularySortOrder.ReviewDue });
+            Assert.Equal("new-word", dueFirst[0].Headword);
         }
         finally
         {
@@ -199,11 +204,11 @@ public sealed class VocabularyAndFsrsTests
         try
         {
             var service = new VocabularyService(tempFile);
-            var existing = service.QueryEntries(new VocabularyQueryFilter())[0];
+            var existing = service.SaveEntry(new VocabularyEntry { Id = $"voc_{Guid.NewGuid():N}", Headword = "existing-word", Translation = "已有词" });
 
             // An imported entry whose Id collides with a different, unrelated existing entry
             // must not be inserted verbatim (that would leave two different entries sharing
-            // the same Id, corrupting Id-based lookups like SaveEntry/ToggleStar/DeleteEntry).
+            // the same Id, corrupting Id-based lookups like SaveEntry/MoveEntry/DeleteEntry).
             var colliding = new VocabularyEntry
             {
                 Id = existing.Id,
@@ -226,7 +231,7 @@ public sealed class VocabularyAndFsrsTests
     }
 
     [Fact]
-    public void VocabularyExportFormatter_AnkiTsv_SanitizesTabsAndNewlinesInTags()
+    public void VocabularyExportFormatter_AnkiTsv_SanitizesTabsAndNewlinesInFields()
     {
         var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_anki_test_{Guid.NewGuid():N}.sqlite3");
         try
@@ -235,18 +240,17 @@ public sealed class VocabularyAndFsrsTests
             var entry = new VocabularyEntry
             {
                 Id = $"voc_{Guid.NewGuid():N}",
-                Headword = "tag-sanitize-check",
-                Translation = "标签清洗测试",
-                Tags = ["normal", "has\ttab", "has\nnewline"]
+                Headword = "field-sanitize-check",
+                Translation = "has\ttab and\nnewline"
             };
             service.SaveEntry(entry);
 
-            var anki = service.ExportToAnkiTsv(new VocabularyQueryFilter { SearchKeyword = "tag-sanitize-check" });
-            var row = anki.Split('\n').Single(l => l.Contains("tag-sanitize-check"));
+            var anki = service.ExportToAnkiTsv();
+            var row = anki.Split('\n').Single(l => l.Contains("field-sanitize-check"));
 
-            // Exactly 6 columns (Front/Back/Phonetic/Mnemonic/Example/Tags): a stray raw tab or
-            // newline inside the Tags field would otherwise introduce extra columns/rows.
-            Assert.Equal(6, row.TrimEnd('\r').Split('\t').Length);
+            // Exactly 5 columns (Front/Back/Phonetic/Mnemonic/Example): a stray raw tab or
+            // newline inside a field would otherwise introduce extra columns/rows.
+            Assert.Equal(5, row.TrimEnd('\r').Split('\t').Length);
         }
         finally
         {
@@ -255,31 +259,33 @@ public sealed class VocabularyAndFsrsTests
     }
 
     [Fact]
-    public void VocabularyService_SeedsAndSupportsCrudFilterAndMultiFormatExport()
+    public void VocabularyService_StartsWithOnlyTheDefaultNotebookAndSupportsMultiFormatExport()
     {
         var tempFile = Path.Combine(Path.GetTempPath(), $"ai_translate_vocab_test_{Guid.NewGuid():N}.sqlite3");
         try
         {
             var service = new VocabularyService(tempFile);
-            var stats = service.GetDashboardStats();
-            Assert.True(stats.TotalEntries >= 5);
-            Assert.True(stats.DueTodayCount >= 3);
+            var fresh = Assert.Single(service.GetNotebookSummaries());
+            Assert.True(fresh.Notebook.IsSystemDefault);
+            Assert.Equal(0, fresh.EntryCount);
 
             // Lookup built-in lexicon and add/update
             Assert.True(BuiltInShowcaseLexicon.TryGet("serendipity", out var dictEntry));
-            var updated = service.AddOrUpdateFromDictionary(
+            var added = service.AddOrUpdateFromDictionary(
                 dictEntry,
                 notebookId: "default",
                 contextSentence: "Pure serendipity led to the discovery.",
                 source: TranslationTriggerSource.SelectionPopup,
-                sourceTitle: "UnitTest",
-                userNote: "重点掌握");
-
-            Assert.Equal("重点掌握", updated.UserPersonalNote);
-            Assert.True(updated.LookupCount >= 4);
+                sourceTitle: "UnitTest");
+            Assert.Equal("Pure serendipity led to the discovery.", added.ContextSentence);
+            var again = service.AddOrUpdateFromDictionary(dictEntry, "default");
+            Assert.Equal(added.Id, again.Id);
+            Assert.Equal(2, again.LookupCount);
+            var summary = Assert.Single(service.GetNotebookSummaries());
+            Assert.Equal((1, 1), (summary.EntryCount, summary.DueCount));
 
             // Create custom notebook
-            var nb = service.CreateNotebook("测试专属词本", "用于单元测试");
+            var nb = service.CreateNotebook("测试专属词本");
             Assert.Contains(service.GetNotebooks(), x => x.Id == nb.Id);
 
             // Export formats
@@ -292,6 +298,9 @@ public sealed class VocabularyAndFsrsTests
             Assert.Contains("#columns:Front\tBack", anki);
             Assert.Contains("Headword,Phonetic,Translation", csv);
             Assert.Contains("serendipity", json);
+            Assert.DoesNotContain("Tags", csv);
+            Assert.DoesNotContain("个人笔记", md);
+            Assert.DoesNotContain("serendipity", service.ExportToMarkdown(new() { NotebookId = nb.Id }));
         }
         finally
         {

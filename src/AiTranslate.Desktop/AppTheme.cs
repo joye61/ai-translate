@@ -122,6 +122,8 @@ public static class AppTheme
     public static IBrush Amber { get; } = Frozen(0xFFB06E0A);
     public static IBrush AmberSoft { get; } = Frozen(0x24E8A317);
     public static IBrush Danger { get; } = Frozen(0xFFC0283A);
+    public static IBrush DangerHover { get; } = Frozen(0xFFA81F31);
+    public static IBrush DangerPressed { get; } = Frozen(0xFF8F1928);
     public static IBrush DangerSoft { get; } = Frozen(0x1AC0283A);
 
     /// <summary>
@@ -139,9 +141,6 @@ public static class AppTheme
         public static Hue Rose { get; } = Hue.Create(0xFFB23462, 0xFFDB5C87);
         public static Hue Sage { get; } = new(Frozen(0xFF167F56), EmeraldSoft, Emerald);
         public static Hue Neutral { get; } = new(TextSecondary, CardElevatedBg, TextMuted);
-
-        /// <summary>Rotation used to give user-created items (notebooks) a stable color.</summary>
-        public static IReadOnlyList<Hue> Rotation { get; } = [Coral, Sky, Jade, Violet, Honey, Rose, Sage];
     }
 
     /// <summary>The "AI-generated insight" marker (etymology, grammar, context meaning, nuance).</summary>

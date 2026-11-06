@@ -140,7 +140,8 @@ public sealed class EntryBlockCompletenessTests
                 EtymologyNotes = [new("原有主题", "原有解释")], Mnemonics = [new("原有方法", "原有线索", "原有解释")],
                 CulturalNotes = [new("原有背景", "原有解释")], ToneEvidence = [new("Please", "礼貌", "原有解释")] };
             var cards = new VocabularyService(Path.Combine(folder.FullName, "cards.json"));
-            var collected = cards.AddOrUpdateFromDictionary(original, sourceTitle: "阅读笔记", userNote: "个人记录");
+            var collected = cards.AddOrUpdateFromDictionary(original, sourceTitle: "阅读笔记");
+            collected = cards.SaveEntry(collected with { UserPersonalNote = "个人记录" });
             var progress = cards.SubmitReview(collected.Id, ReviewRating.Good);
             var cache = new DictionaryEntryCache(Path.Combine(folder.FullName, "cache.db"));
             JsonObject value = block switch
@@ -168,7 +169,7 @@ public sealed class EntryBlockCompletenessTests
             Assert.Equal("旧词源", saved.EtymologyAndRoot);
             Assert.Equal("旧助记", saved.MemoryMnemonic);
             Assert.Equal("旧文化说明", saved.CulturalNote);
-            var filter = new VocabularyQueryFilter { SearchKeyword = original.SourceText };
+            var filter = new VocabularyQueryFilter();
             Assert.Contains("新的 有效 说明。", reopened.ExportToCsv(filter));
             Assert.Contains("新的 有效 说明。", reopened.ExportToAnkiTsv(filter));
             Assert.DoesNotContain("**有效**", reopened.ExportToCsv(filter));
@@ -178,7 +179,7 @@ public sealed class EntryBlockCompletenessTests
     }
 
     [Fact]
-    public void NewFieldsRespectTypeAnchorsAndLegacyEntriesAndRemainSearchable()
+    public void NewFieldsRespectTypeAnchorsAndLegacyEntries()
     {
         var best = AiDictionaryService.ParseDictionaryResponse("best", "zh-Hans", Best);
         Assert.Equal(3, best.EtymologyNotes.Count);
@@ -200,13 +201,11 @@ public sealed class EntryBlockCompletenessTests
         try
         {
             var cards = new VocabularyService(Path.Combine(folder.FullName, "cards.json"));
-            var card = cards.AddOrUpdateFromDictionary(best);
+            cards.AddOrUpdateFromDictionary(best);
             cards.AddOrUpdateFromDictionary(legacy);
             var saved = cards.FindByHeadword("best")!;
             Assert.Equal(best.Mnemonics, saved.ToDictionaryResult().Mnemonics);
             Assert.Equal(best.EtymologyNotes, saved.ToDictionaryResult().EtymologyNotes);
-            Assert.Contains(cards.QueryEntries(new() { SearchKeyword = "场景提取" }), c => c.Id == card.Id);
-            Assert.Contains(cards.QueryEntries(new() { SearchKeyword = "拆分边界" }), c => c.Id == card.Id);
             var terms = Enumerable.Range(0, 10).Select(i => $"technical term {i}").ToArray();
             foreach (var term in terms) cards.AddOrUpdateFromDictionary(new() { SourceText = term, PrimaryTranslation = "术语", ItemType = VocabularyItemType.TechnicalTerm });
             Assert.Equal(10, cards.FindGlossaryTerms(string.Join("; ", terms), "zh-Hans").Count);
@@ -260,14 +259,15 @@ public sealed class EntryBlockCompletenessTests
                     window.UpdateLayout();
                     Assert.Contains(popup.GetVisualDescendants().OfType<TextBlock>(), t => (t.Text ?? t.Inlines?.Text)?.Contains(word.Mnemonics[0].Cue) == true);
                     var cards = new VocabularyService(Path.Combine(folder.FullName, "cards.json"));
-                    var notebook = cards.CreateNotebook("栏目验收", "");
-                    cards.AddOrUpdateFromDictionary(word, notebook.Id);
-                    var arena = new FsrsReviewArenaView(cards, speech, new AppSettingsStore(Path.Combine(folder.FullName, "review.json")), _ => { });
-                    window.Content = arena;
-                    arena.RefreshDecksAndStart(notebook.Id);
+                    var notebook = cards.CreateNotebook("栏目验收");
+                    var saved = cards.AddOrUpdateFromDictionary(word, notebook.Id);
+                    var reading = new DictionaryResultView(saved.Headword, saved.TargetLanguage, speech,
+                        new AppSettingsStore(Path.Combine(folder.FullName, "review.json")), (_, _, _) => { });
+                    window.Content = new ScrollViewer { Content = reading };
+                    reading.ShowEntry(saved.ToDictionaryResult(), complete: true);
                     window.UpdateLayout();
-                    Assert.All(word.Mnemonics, m => Assert.Contains(arena.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == m.Cue));
-                    Assert.All(word.EtymologyNotes, n => Assert.Contains(arena.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == n.Title));
+                    Assert.All(word.Mnemonics, m => Assert.Contains(reading.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == m.Cue));
+                    Assert.All(word.EtymologyNotes, n => Assert.Contains(reading.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == n.Title));
                     SelectableTextBlock[] Texts() => details.GetVisualDescendants().OfType<SelectableTextBlock>().Where(t => t.IsEffectivelyVisible).ToArray();
                 }
                 finally { window.Close(); }

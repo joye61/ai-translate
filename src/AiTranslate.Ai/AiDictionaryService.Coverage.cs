@@ -90,7 +90,7 @@ public sealed partial class AiDictionaryService
                 返回 {"senses":[],"collocations":[],"usageContrasts":[],"senseGrammar":[],"inflections":[],"wordFamily":[]}，没有可靠补充的数组留空。
                 对已有义项补 grammarLabel 或 usageCases，用 senseGrammar，每项带回输入中的 id（如 sense-0）、原样的 partOfSpeech 和 definitionZh，不改已有内容。新义项的 usageCases 随 senses 给出。只有条件会影响冠词、数、词形、句法或意思时才给 usageCases，每项为 {condition,grammar,expression,meaning}，写清条件、语法属性、保留关键成分的源语短表达及其译义。例如 coffee 泛指饮品和按杯点单应展示不同表达；paper 的材料义与论文义应在各自义项说明。条件已由用法或例句说清时避免重复。
                 inflections 按所属词性补各义可共享的 {partOfSpeech,label,value}：如复数、第三人称单数、过去式、分词、比较级和最高级。仅个别义项适用的形式归入其 usageCases，保留地域、语域和常用程度等限定；按源语语法补缺。
-                wordFamily 按各主要义补齐影响选词的常用 {label,value,partOfSpeech,relation,usage,expression}。label 为目标词的简短中文释义，value 为源语单词，partOfSpeech 为该词词性，usage 说明选择条件或意义差别，expression 为含 value 原拼写的自然短表达。relation 仅用 derived（直接派生）、counterpart（功能对应，如 good/well）、sameForm（同形跨词性，须有另一词性和体现功能的短例）、confusable（近形易混，如 hard/hardly）。已讲清的同形义项不重列；切勿机械加 -ly。
+                {{WordFamilyGuide}}
                 senses 每项含 partOfSpeech、definitionZh（读者母语释义）、example；grammarLabel 标明本义适用的可数性、及物性、人称与格或可分级性，可选 definitionEn、scenario、grammarPattern、register。
                 若没有语境且新义项的一项常用目标语译法在主译文中缺失，在该义项的 headTranslation 给出这一个简短目标语译法。其他情况省略。不得替换原有译文。
                 collocations 每项含 phrase（源语表达）、meaning（目标语译法）、example，可选 senseHint。

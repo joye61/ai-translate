@@ -77,7 +77,7 @@ internal sealed class ScreenshotOverlayWindow : Window
         _onOpenInDictionary = onOpenInDictionary;
         _onQuickSaveToNotebook = onQuickSaveToNotebook;
         _onClosed = onClosed;
-        _targetLangId = settings.Current.DefaultTargetLanguage;
+        _targetLangId = DictionaryTranslationDirection.GetMode(settings.Current);
 
         Title = "AI 截图原位翻译 (XCapture Engine)";
         WindowDecorations = WindowDecorations.None;
@@ -112,42 +112,15 @@ internal sealed class ScreenshotOverlayWindow : Window
         _scanEffect = new OcrScanEffect();
         _translatedImageView = new Image { Stretch = Stretch.Fill, IsHitTestVisible = false, IsVisible = false };
 
-        var hintContainer = new Border
-        {
-            Background = AppTheme.Frozen(0xF2FFFFFF),
-            BorderBrush = AppTheme.BorderSubtle,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(AppTheme.Radius.Pill),
-            BoxShadow = AppTheme.PopupShadow,
-            Padding = new Thickness(22, 10),
-            IsHitTestVisible = false,
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                Children =
-                {
-                    new MdiIcon("crop-free", 18, AppTheme.AccentBright),
-                    new TextBlock
-                    {
-                        Text = "拖拽框选屏幕区域进行 XCapture 原位翻译 · 支持一键摘录生词 · 按 Esc 退出",
-                        FontFamily = AppTheme.BodyFont,
-                        FontSize = 13.5,
-                        FontWeight = FontWeight.Medium,
-                        Foreground = AppTheme.TextPrimary
-                    }
-                }
-            }
-        };
 
         _languageCombo = new ComboBox
         {
-            Width = 136,
+            Width = 150,
             Height = 32,
             CornerRadius = new CornerRadius(7),
             FontFamily = AppTheme.BodyFont,
             FontSize = 12.5,
-            ItemsSource = TranslationLanguages.All,
+            ItemsSource = DictionaryTranslationDirection.Modes,
             ItemTemplate = new FuncDataTemplate<TranslationLanguage>((lang, _) => new TextBlock
             {
                 Text = lang?.DisplayName,
@@ -155,22 +128,28 @@ internal sealed class ScreenshotOverlayWindow : Window
                 FontSize = 12.5,
                 VerticalAlignment = VerticalAlignment.Center
             }),
-            SelectedItem = TranslationLanguages.GetOrDefault(_targetLangId)
+            SelectedItem = DictionaryTranslationDirection.Modes.First(m => m.Id == _targetLangId)
         };
+        var systemLanguage = DictionaryTranslationDirection.ReaderLanguage();
+        var alternate = systemLanguage.Id == "en" ? "简体中文" : "英语";
+        ToolTip.SetTip(_languageCombo, $"自动模式下，外语译为{systemLanguage.ChineseName}，{systemLanguage.ChineseName}译为{alternate}");
+        AutomationProperties.SetName(_languageCombo, "翻译方向");
         _languageCombo.SelectionChanged += (_, _) =>
         {
-            if (!_syncingCombo && _languageCombo.SelectedItem is TranslationLanguage lang)
-                _ = TranslateSelectionAsync(lang.Id);
+            if (_syncingCombo || _languageCombo.SelectedItem is not TranslationLanguage lang) return;
+            if (lang.Id != DictionaryTranslationDirection.GetMode(settings.Current))
+                settings.Update(settings.Current with { DictionaryTargetMode = lang.Id });
+            _ = TranslateSelectionAsync(lang.Id);
         };
 
-        _toggleOrigBtn = CreateToolbarButton("image-outline", "对比查看原图 / 译图", ToggleOriginalView);
-        _retryBtn = CreateToolbarButton("refresh", "重新识别并翻译", () => _ = TranslateSelectionAsync(_targetLangId, forceRetry: true));
-        _copyTextBtn = CreateToolbarButton("content-copy", "复制完整译文文本", CopyTranslatedTextAsync);
-        _addToNotebookBtn = CreateToolbarButton("notebook-plus", "一键加入生词本 / 金句库", SaveToVocabularyNotebook);
-        _openDictBtn = CreateToolbarButton("book-open-variant", "在主词典工作台中深度精析", OpenInMainDictionary);
-        _saveImgBtn = CreateToolbarButton("content-save", "保存译文图片 (PNG)", () => _ = ExportTranslatedImageAsync(saveFile: true));
+        _toggleOrigBtn = CreateToolbarButton("regular/image", "对比查看原图 / 译图", ToggleOriginalView);
+        _retryBtn = CreateToolbarButton("arrows-rotate", "重新识别并翻译", () => _ = TranslateSelectionAsync(_targetLangId, forceRetry: true));
+        _copyTextBtn = CreateToolbarButton("regular/copy", "复制完整译文文本", CopyTranslatedTextAsync);
+        _addToNotebookBtn = CreateToolbarButton("regular/bookmark", "一键加入生词本 / 金句库", SaveToVocabularyNotebook);
+        _openDictBtn = CreateToolbarButton("book-open", "在主词典工作台中深度精析", OpenInMainDictionary);
+        _saveImgBtn = CreateToolbarButton("floppy-disk", "保存译文图片 (PNG)", () => _ = ExportTranslatedImageAsync(saveFile: true));
         _copyImgBtn = CreateToolbarButton("check", "复制译文图片到剪贴板并完成", () => _ = ExportTranslatedImageAsync(saveFile: false), isPrimary: true);
-        var closeBtn = CreateToolbarButton("close", "关闭截图翻译 (Esc)", Close, isDanger: true);
+        var closeBtn = CreateToolbarButton("xmark", "关闭截图翻译 (Esc)", Close, isDanger: true);
 
         _statusText = new TextBlock
         {
@@ -187,7 +166,7 @@ internal sealed class ScreenshotOverlayWindow : Window
             Spacing = 4,
             Children =
             {
-                new MdiIcon("translate", 16, AppTheme.AccentBright) { Margin = new Thickness(6, 0, 2, 0) },
+                new FontAwesomeIcon("language", 16, AppTheme.AccentBright) { Margin = new Thickness(6, 0, 2, 0) },
                 _languageCombo,
                 CreateSeparator(),
                 _toggleOrigBtn,
@@ -229,7 +208,6 @@ internal sealed class ScreenshotOverlayWindow : Window
                 _translatedImageView,
                 _scanEffect,
                 _selectionFrame,
-                hintContainer,
                 _toolbar
             }
         };
@@ -238,8 +216,6 @@ internal sealed class ScreenshotOverlayWindow : Window
         {
             bgImage.Width = ClientSize.Width;
             bgImage.Height = ClientSize.Height;
-            Canvas.SetLeft(hintContainer, Math.Max(16, (ClientSize.Width - 520) / 2));
-            Canvas.SetTop(hintContainer, 28);
             UpdateMaskAndSelectionLayout();
         };
 
@@ -345,12 +321,12 @@ internal sealed class ScreenshotOverlayWindow : Window
         }
     }
 
-    private async Task TranslateSelectionAsync(string languageId, bool forceRetry = false)
+    private async Task TranslateSelectionAsync(string modeId, bool forceRetry = false)
     {
         if (!_hasSelection) return;
-        _targetLangId = languageId;
+        _targetLangId = modeId;
         _syncingCombo = true;
-        try { _languageCombo.SelectedItem = TranslationLanguages.Get(languageId); }
+        try { _languageCombo.SelectedItem = DictionaryTranslationDirection.Modes.First(m => m.Id == modeId); }
         finally { _syncingCombo = false; }
 
         if (forceRetry)
@@ -388,9 +364,11 @@ internal sealed class ScreenshotOverlayWindow : Window
                 _regions = regions;
             }
 
+            var sourceText = _sourceText ?? "";
+            var languageId = await Task.Run(() => DictionaryTranslationDirection.ResolveTargetId(sourceText, modeId), token);
             var lang = TranslationLanguages.Get(languageId);
             UpdateToolbarState($"正在原位翻译为 {lang.DisplayName}…");
-            var transport = _settings.CreateTransport() ?? throw new AiException("请在「引擎与快捷键」中配置 AI 引擎后再翻译。");
+            var transport = _settings.CreateTransport() ?? throw new AiException("请在「应用设置」中配置 AI 引擎后再翻译。");
             using var ownedTransport = transport as IDisposable;
             var service = new AiTranslationService(transport);
             var regionTexts = await service.TranslateRegionsAsync(
@@ -543,7 +521,7 @@ internal sealed class ScreenshotOverlayWindow : Window
         return encoded.ToArray();
     }
 
-    private static Button CreateToolbarButton(string mdiIcon, string tooltip, Action onClick, bool isPrimary = false, bool isDanger = false)
+    private static Button CreateToolbarButton(string icon, string tooltip, Action onClick, bool isPrimary = false, bool isDanger = false)
     {
         var fg = isPrimary ? Brushes.White : isDanger ? AppTheme.Danger : AppTheme.TextPrimary;
         var bg = isPrimary ? AppTheme.Accent : Brushes.Transparent;
@@ -558,7 +536,7 @@ internal sealed class ScreenshotOverlayWindow : Window
             BorderThickness = new Thickness(0),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Content = new MdiIcon(mdiIcon, 17, fg)
+            Content = new FontAwesomeIcon(icon, 17, fg)
         };
         ToolTip.SetTip(btn, tooltip);
         AutomationProperties.SetName(btn, tooltip);

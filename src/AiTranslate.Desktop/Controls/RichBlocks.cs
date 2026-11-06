@@ -151,7 +151,7 @@ internal static class RichBlocks
             CalloutTone.Attention => (AppTheme.AmberSoft, AppTheme.Amber),
             _ => (AppTheme.CardElevatedBg, AppTheme.TextSecondary)
         };
-        var glyph = new MdiIcon(icon, 16, iconBrush) { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 3, 0, 0) };
+        var glyph = new FontAwesomeIcon(icon, 16, iconBrush) { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 3, 0, 0) };
         Grid.SetColumn(content, 1);
         return new Border
         {
@@ -168,7 +168,7 @@ internal static class RichBlocks
     /// <summary>Inset for quoted text, with an optional playback action.</summary>
     public static Border Quote(Control content, Control? action = null)
     {
-        var mark = new MdiIcon("format-quote-open", 16, AppTheme.TextMuted)
+        var mark = new FontAwesomeIcon("quote-left", 16, AppTheme.TextMuted)
         {
             VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 3, 0, 0)
         };

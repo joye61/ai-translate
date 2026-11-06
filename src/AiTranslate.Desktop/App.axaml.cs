@@ -73,6 +73,7 @@ public sealed class App : Application
             var selectionPrivacy = _platform is WindowsDesktopPlatformService windows ? new WindowsSelectionPrivacy(windows) : null;
             var settingsStore = new AppSettingsStore();
             var cache = new DictionaryEntryCache();
+            var grammarLibrary = new GrammarLibrary();
             _ = Task.Run(() =>
             {
                 try { cache.UpgradeExistingDatabase(); }
@@ -80,13 +81,15 @@ public sealed class App : Application
                 catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Local cache upgrade deferred: {0}", ex.Message); }
             });
             var dictionaryService = new AiDictionaryService(() => settingsStore.CreateTransport(),
-                cache, vocabularyService.FindGlossaryTerms, vocabularyService.RefreshCollectedEntries);
+                cache, vocabularyService.FindGlossaryTerms, vocabularyService.RefreshCollectedEntries, grammarLibrary: grammarLibrary);
+            var grammarService = new AiGrammarService(() => settingsStore.CreateTransport(), grammarLibrary);
             _speechService = new KokoroSpeechService();
 
             var mainWindow = new MainWindow(
                 _platform,
                 settingsStore,
                 dictionaryService,
+                grammarService,
                 vocabularyService,
                 _speechService);
 

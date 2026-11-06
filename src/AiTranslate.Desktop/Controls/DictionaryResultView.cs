@@ -23,7 +23,7 @@ internal sealed class DictionaryResultView : StackPanel
     private readonly StackPanel _languages = new() { Orientation = Orientation.Horizontal, Spacing = AppTheme.Space.XXS, VerticalAlignment = VerticalAlignment.Center };
     private readonly StackPanel _domains = new() { Orientation = Orientation.Horizontal, Spacing = AppTheme.Space.XS, VerticalAlignment = VerticalAlignment.Center, IsVisible = false };
     private readonly Ellipse _statusDot = new() { Width = 6, Height = 6, VerticalAlignment = VerticalAlignment.Center };
-    private readonly MdiIcon _statusIcon = new("sparkles", 13, AppTheme.Insight) { IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
+    private readonly FontAwesomeIcon _statusIcon = new("wand-magic-sparkles", 13, AppTheme.Insight) { IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock _status = new() { Text = "正在翻译…", FontSize = AppTheme.Type.Caption, Foreground = AppTheme.TextSecondary, VerticalAlignment = VerticalAlignment.Center };
     private readonly SelectableTextBlock _heading = new() { FontWeight = FontWeight.Bold, Foreground = AppTheme.TextPrimary, TextWrapping = TextWrapping.Wrap };
     private readonly WrapPanel _titleLine;
@@ -36,14 +36,19 @@ internal sealed class DictionaryResultView : StackPanel
     private readonly ISpeechSynthesisService _speech;
     private readonly AppSettingsStore _settings;
     private readonly Action<string, string, bool> _lookup;
-    private readonly TextBlock _readingHintText = new()
+    private readonly TextBlock _readingHintText = TextStyles.Apply(new TextBlock
     {
-        FontSize = AppTheme.Type.Caption, Foreground = AppTheme.TextMuted, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center
-    };
+        VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap
+    }, TextRole.Meta);
     private readonly Control _readingHint;
     private readonly ContentControl _actions = new() { IsVisible = false, VerticalAlignment = VerticalAlignment.Top };
-    private readonly ContentControl _secondaryActions = new() { VerticalAlignment = VerticalAlignment.Center };
+    private readonly ContentControl _secondaryActions = new()
+    {
+        VerticalAlignment = VerticalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+        HorizontalContentAlignment = HorizontalAlignment.Stretch
+    };
     private readonly Border _footer;
+    private readonly TextBlock _reviewFeedback = BlockReviewActions.CreateError();
     private readonly SelectableTextBlock _errorText = new() { FontSize = AppTheme.Type.Small, Foreground = AppTheme.Danger, TextWrapping = TextWrapping.Wrap };
     private readonly Border _error;
     private readonly Control _skeleton = new LoadingSkeleton { Margin = new Thickness(0, AppTheme.Space.XXL, 0, 0) };
@@ -99,7 +104,7 @@ internal sealed class DictionaryResultView : StackPanel
         _audio.VerticalAlignment = VerticalAlignment.Center;
         _audio.Margin = new Thickness(0, AppTheme.Space.XXS, 0, 0);
 
-        var hintIcon = new MdiIcon("information-outline", 13, AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Center };
+        var hintIcon = new FontAwesomeIcon("circle-info", 13, AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(_readingHintText, 1);
         _readingHint = new Grid
         {
@@ -111,7 +116,7 @@ internal sealed class DictionaryResultView : StackPanel
         var toolbar = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"), RowDefinitions = new RowDefinitions("Auto,Auto"),
-            ColumnSpacing = AppTheme.Space.L,
+            ColumnSpacing = AppTheme.Space.M, MinHeight = 32,
             Children = { _readingHint, _secondaryActions }
         };
         toolbar.SizeChanged += (_, e) =>
@@ -126,8 +131,10 @@ internal sealed class DictionaryResultView : StackPanel
         };
         _footer = new Border
         {
-            IsVisible = false, BorderBrush = AppTheme.BorderSubtle, BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(0, AppTheme.Space.S, 0, 0), Child = toolbar
+            IsVisible = false, Child = new StackPanel
+            {
+                Spacing = AppTheme.Space.XS, Children = { toolbar, _reviewFeedback }
+            }
         };
 
         _error = new Border
@@ -211,7 +218,7 @@ internal sealed class DictionaryResultView : StackPanel
         else
         {
             _languages.Children.Add(MetaText(UiLabels.Language(sourceLanguage)));
-            _languages.Children.Add(new MdiIcon("arrow-right", 12, AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Center });
+            _languages.Children.Add(new FontAwesomeIcon("arrow-right", 12, AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Center });
             _languages.Children.Add(MetaText(UiLabels.Language(targetLanguage)));
         }
         _heading.Text = _query;
@@ -237,7 +244,7 @@ internal sealed class DictionaryResultView : StackPanel
         if (icon is not null)
         {
             _statusIcon.IconName = icon;
-            _statusIcon.Foreground = icon == "sparkles" ? AppTheme.Insight : AppTheme.TextMuted;
+            _statusIcon.Foreground = icon == "wand-magic-sparkles" ? AppTheme.Insight : AppTheme.TextMuted;
         }
         _statusDot.Fill = kind switch
         {
@@ -320,6 +327,10 @@ internal sealed class DictionaryResultView : StackPanel
         _ => null
     };
 
+    internal static string? CompletionStatus(DictionaryEntryResult entry) =>
+        entry.Processing is { Review: DictionaryStageState.Failed, Message.Length: > 0 } state
+            ? state.Message : QualityStatus(entry);
+
     private void RenderEntry(DictionaryEntryResult entry, bool complete)
     {
         SetFormat(entry.ItemType, entry.DetectedSourceLanguage, entry.TargetLanguage);
@@ -327,28 +338,30 @@ internal sealed class DictionaryResultView : StackPanel
         {
             _shownDomains = entry.Domains;
             _domains.Children.Clear();
-            foreach (var domain in entry.Domains) _domains.Children.Add(StudioUi.CreateChip(domain, "tag-outline"));
+            foreach (var domain in entry.Domains) _domains.Children.Add(StudioUi.CreateChip(domain, "tag"));
             _domains.IsVisible = entry.Domains.Count > 0;
             ToolTip.SetTip(_domains, "所属专业领域");
         }
         _translations.ShowEntry(entry, complete ? (q, context) => _lookup(q, context, true) : null, complete ? BlockReviews : null);
-        if (complete && entry.NotebookSyncPending) SetStatus("已缓存 · 生词本待同步", StatusKind.Done, "database-outline");
+        if (complete && entry.NotebookSyncPending) SetStatus("已缓存 · 生词本待同步",         StatusKind.Done, "database");
         else if (QualityStatus(entry) is { } status)
         {
-            SetStatus(status, complete ? StatusKind.Done : StatusKind.Working, complete ? "sparkles" : null);
+            SetStatus(status, complete ? StatusKind.Done : StatusKind.Working, complete ? "wand-magic-sparkles" : null);
             ToolTip.SetTip(_status, string.IsNullOrWhiteSpace(entry.Processing?.Message) ? null : entry.Processing.Message);
         }
         else if (complete)
             switch (entry.Origin)
             {
-                case DictionaryResultOrigin.Cache: SetStatus("本地缓存", StatusKind.Done, "database-outline"); break;
-                case DictionaryResultOrigin.Supplemented: SetStatus("已用 AI 补充", StatusKind.Done, "sparkles"); break;
-                case DictionaryResultOrigin.Reviewed: SetStatus("智能复核已更新", StatusKind.Done, "sparkles"); break;
-                case DictionaryResultOrigin.BuiltIn: SetStatus("内置词条", StatusKind.Done, "book-open-variant"); break;
-                default: SetStatus("AI 翻译", StatusKind.Done, "sparkles"); break;
+                case DictionaryResultOrigin.Cache: SetStatus("本地缓存", StatusKind.Done, "database"); break;
+                case DictionaryResultOrigin.Supplemented:                 SetStatus("已用 AI 补充", StatusKind.Done, "wand-magic-sparkles"); break;
+                                case DictionaryResultOrigin.Reviewed: SetStatus("智能复核已更新", StatusKind.Done, "wand-magic-sparkles"); break;
+                case DictionaryResultOrigin.BuiltIn: SetStatus("内置词条", StatusKind.Done, "book-open"); break;
+                default: SetStatus("AI 翻译", StatusKind.Done, "wand-magic-sparkles"); break;
             }
         else SetStatus(entry.ItemType.IsPassage() ? "正在整理译文…" : "正在补全词条…", StatusKind.Working);
         _details.ShowEntry(entry, complete);
+        _reviewFeedback.IsVisible = complete && entry.Processing?.Review == DictionaryStageState.Failed;
+        _reviewFeedback.Text = _reviewFeedback.IsVisible ? CompletionStatus(entry) : "";
         if (complete)
         {
             DictionaryReadingText.EnableSelectionLookup(this, (q, context) => _lookup(q, context, false));
@@ -381,7 +394,11 @@ internal sealed class DictionaryResultView : StackPanel
         _secondaryActions.Content = secondary;
     }
 
-    public void EnableSupplementActions(bool enabled) => _secondaryActions.IsEnabled = enabled;
+    public void EnableSupplementActions(bool enabled)
+    {
+        _secondaryActions.IsEnabled = enabled;
+        if (!enabled) _reviewFeedback.IsVisible = false;
+    }
 
     public void MarkStopped()
     {

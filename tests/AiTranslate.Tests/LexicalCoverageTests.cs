@@ -125,11 +125,13 @@ public sealed class LexicalCoverageTests
                 Assert.Null(request["english_reference"]);
                 if ((string?)request["role"] == "learning") return PipelineReplies.Proposal(request.AsObject(), "not_applicable");
                 Assert.NotNull(request["entry"]!["senses"]);
-                return calls == 3 ? """{"status":"accepted"}""" : PipelineReplies.Proposal(request.AsObject(), "accepted");
+                // Exhaust the one automatic repair before testing the explicit retry from cache.
+                return calls <= 4 ? """{"status":"accepted"}""" : PipelineReplies.Proposal(request.AsObject(), "accepted");
             }), cache, readerLanguageId: () => "zh-Hans");
             var first = await service.LookupOrTranslateAsync("chat", "zh-Hans");
             Assert.Equal("猫", first.PrimaryTranslation);
             Assert.False(first.LexicalCoverageReviewed);
+            Assert.Equal(4, calls);
             var offline = await new AiDictionaryService(() => null, cache, readerLanguageId: () => "zh-Hans").LookupOrTranslateAsync("chat", "zh-Hans");
             Assert.False(offline.LexicalCoverageReviewed);
             var reviewed = await service.ReviewEntryAsync(offline, default);
@@ -137,7 +139,7 @@ public sealed class LexicalCoverageTests
             Assert.Equal(first.PrimaryTranslation, reviewed.PrimaryTranslation);
             Assert.Empty(reviewed.Collocations);
             Assert.True((await service.LookupOrTranslateAsync("chat", "zh-Hans")).LexicalCoverageReviewed);
-            Assert.Equal(4, calls);
+            Assert.Equal(5, calls);
         }
         finally { folder.Delete(true); }
     }

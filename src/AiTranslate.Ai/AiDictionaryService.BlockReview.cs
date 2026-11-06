@@ -68,28 +68,54 @@ public sealed partial class AiDictionaryService
         background.Remove("reviewedBlocks");
         background.Remove("lexicalCoverageReviewed");
         var messages = BlockReviewMessages(entry, spec, reader, fields, current, background);
-        var transport = transportFactory() ?? throw new AiException("请先在「引擎与快捷键」中配置 AI 引擎。");
-        string response;
+        var transport = transportFactory() ?? throw new AiException("请先在「应用设置」中配置 AI 引擎。");
+        DictionaryEntryResult? reviewed;
+        var budget = new AiRequestBudget(maximumRequests: 2);
         try
         {
-            var stream = new DictionaryFieldPreview(null, onPreview is null ? null : root =>
+            while (true)
             {
-                if (cancellationToken.IsCancellationRequested ||
-                    (!root.TryGetProperty("edits", out _) && !root.TryGetProperty("fields", out _))) return;
-                // A prefix can end in the middle of a path, a string or a new row. Render only
-                // readable edits, always against the original and never against the previous frame.
-                DictionaryEntryResult? draft;
-                try { draft = ApplyReview(entry, otherSectionFields, wire.DeepClone().AsObject(), current, root.GetRawText()); }
-                catch (AiException) { return; }
-                if (draft is not null) onPreview(draft);
-            });
-            response = (await transport.CompleteJsonAsync(messages, stream.Append, cancellationToken).ConfigureAwait(false)).Text;
+                var stream = new DictionaryFieldPreview(null, onPreview is null ? null : root =>
+                {
+                    if (cancellationToken.IsCancellationRequested ||
+                        (!root.TryGetProperty("edits", out _) && !root.TryGetProperty("fields", out _))) return;
+                    // A prefix can end in the middle of a path, a string or a new row. Render only
+                    // readable edits, always against the original and never against the previous frame.
+                    DictionaryEntryResult? draft;
+                    try { draft = ApplyReview(entry, otherSectionFields, wire.DeepClone().AsObject(), current, root.GetRawText()); }
+                    catch (AiException) { return; }
+                    if (draft is not null) onPreview(draft);
+                });
+                var response = (await transport.CompleteJsonAsync(messages, stream.Append, cancellationToken,
+                    new(budget, 8192)).ConfigureAwait(false)).Text;
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(response)) throw InvalidEdits("回复为空。请返回完整的复核 JSON。");
+                    reviewed = ApplyReview(entry, otherSectionFields, wire.DeepClone().AsObject(), current, response);
+                    break;
+                }
+                catch (BlockReviewValidationException ex)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!budget.TryReserveRetry())
+                        throw new AiException("本次复核未完成，请稍后重试。", ex);
+                    // Both attempts start from the same snapshot. A rejected response or a streamed
+                    // preview must never become the base of the correction or reach persistence.
+                    onPreview?.Invoke(entry);
+                    messages = [.. messages,
+                        new() { ["role"] = "assistant", ["content"] = response },
+                        new() { ["role"] = "user", ["content"] = JsonSerializer.Serialize(new
+                        {
+                            validation_error = ex.Message, field = ex.Field, accepted_content = ex.AcceptedContent,
+                            instruction = "上次回复未通过当前栏目规则，尚未保存任何修改。请基于最初的 current_section 重新给出完整复核 JSON，不要接着上次的索引编辑。修正不合规则的字段或移除本次无效的新增建议，保留有效改进；不要添加其他栏目的内容。若确实没有可靠改进，返回 unchanged。"
+                        }) }];
+                }
+            }
         }
         finally { (transport as IDisposable)?.Dispose(); }
         cancellationToken.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(response)) throw new AiException("引擎没有返回复核内容，请重新复核。");
-        var reviewed = ApplyReview(entry, otherSectionFields, wire, current, response);
-        // Old detached results have nowhere to store a receipt. On persisted/managed entries
+        // Detached results have nowhere to store a receipt. On persisted/managed entries
         // also remember a successful no-op, so clicking the same block again is free.
         if (reviewed is null && entry.Processing is null && cache is null) return original;
         var changed = reviewed is not null;
@@ -243,8 +269,9 @@ public sealed partial class AiDictionaryService
                 {
                     "synonymNuances" => "辨析表需有至少两个不同的词语及对应的区别说明。",
                     "morphemes" => "词素拆分需有至少两项，每项都要有词素、类型和含义。",
-                    _ => "模型返回的栏目内容不完整或与原词条不符。"
-                });
+                    "wordFamily" => "关联词必须满足当前 wordFamily 规则：英语 value 只能是单个单词；label、partOfSpeech、relation、usage、expression 必填，expression 和双语 example 须包含该词形。短语搭配不能作为关联词追加。",
+                    _ => $"{field} 中有内容未满足当前栏目的字段或引用规则。请对照 accepted_content 修正被过滤或归一化的内容。"
+                }, field, validated[field]);
                 wire[field] = validated[field]?.DeepClone();
             }
             return changed.All(f => JsonNode.DeepEquals(current[f], wire[f])) ? null : wire.Deserialize<DictionaryEntryResult>(BlockJson);
@@ -259,6 +286,13 @@ public sealed partial class AiDictionaryService
         }
     }
 
-    private static AiException InvalidEdits(string reason = "模型返回的修改格式不正确。") => new(reason);
+    private sealed class BlockReviewValidationException(string reason, string? field, JsonNode? acceptedContent) : AiException(reason)
+    {
+        public string? Field { get; } = field;
+        public JsonNode? AcceptedContent { get; } = acceptedContent?.DeepClone();
+    }
+
+    private static AiException InvalidEdits(string reason = "模型返回的修改格式不正确。", string? field = null,
+        JsonNode? acceptedContent = null) => new BlockReviewValidationException(reason, field, acceptedContent);
     private static AiException StaleEntry() => new("词条与本地缓存版本不同，请打开最新查词结果后再复核。");
 }

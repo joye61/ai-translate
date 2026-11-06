@@ -8,7 +8,7 @@ namespace AiTranslate.Desktop.Controls;
 
 internal static class SpeechPlaybackButton
 {
-    private static readonly string[] Waves = ["volume-low", "volume-medium", "volume-high"];
+    private static readonly string[] Waves = ["volume-off", "volume-low", "volume-high"];
 
     public static Button Create(Func<Action, Button> build, Func<SpeechPlayback, Task> speak, SpeechPlayback? playback = null)
     {
@@ -17,13 +17,13 @@ internal static class SpeechPlaybackButton
         {
             if (playback.State != SpeechPlaybackState.Preparing) _ = speak(playback);
         });
-        var icon = button.Content as MdiIcon ?? ((Panel)button.Content!).Children.OfType<MdiIcon>().Single();
+        var icon = button.Content as FontAwesomeIcon ?? ((Panel)button.Content!).Children.OfType<FontAwesomeIcon>().Single();
         var restIcon = icon.IconName;
         var frame = 0;
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(190) };
         timer.Tick += (_, _) => icon.IconName = Waves[++frame % Waves.Length];
         button.Classes.Add("speech");
-        icon.ClearValue(MdiIcon.ForegroundProperty);
+        icon.ClearValue(FontAwesomeIcon.ForegroundProperty);
 
         var displayed = SpeechPlaybackState.Idle;
         void ShowState(SpeechPlaybackState state)
@@ -43,7 +43,7 @@ internal static class SpeechPlaybackButton
             else
             {
                 timer.Stop();
-                icon.IconName = state == SpeechPlaybackState.Preparing ? "timer-sand" : restIcon;
+                icon.IconName = state == SpeechPlaybackState.Preparing ? "hourglass-half" : restIcon;
             }
         }
 

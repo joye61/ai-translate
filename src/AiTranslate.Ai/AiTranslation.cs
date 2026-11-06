@@ -56,7 +56,7 @@ public sealed partial class AiTranslationService
     public const int MaxResultLength = 64_000;
     private readonly IAiTransport? _transport;
     private readonly IVerifiedTranslationCache? _cache;
-    private IAiTransport Transport => _transport ?? throw new AiException("请在「引擎与快捷键」中配置 AI 引擎后再翻译。");
+    private IAiTransport Transport => _transport ?? throw new AiException("请在「应用设置」中配置 AI 引擎后再翻译。");
 
     private const string PreservationInstructions = """
     翻译范围与语义保留规则（优先于笼统的“完整翻译”要求）：

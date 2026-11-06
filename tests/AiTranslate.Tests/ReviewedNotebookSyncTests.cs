@@ -23,10 +23,11 @@ public sealed class ReviewedNotebookSyncTests
             var original = cached ? await seed.LookupOrTranslateAsync("coffee", "zh-Hans") :
                 new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡",
                     ReaderLanguage = "zh-Hans", Senses = [new("n.", "咖啡")] };
-            var card = store.AddOrUpdateFromDictionary(original, sourceTitle: "菜单", userNote: "点单");
+            var card = store.AddOrUpdateFromDictionary(original, sourceTitle: "菜单");
+            card = store.SaveEntry(card with { UserPersonalNote = "点单" });
             var progress = store.SubmitReview(card.Id, ReviewRating.Good);
-            var other = store.AddOrUpdateFromDictionary(original, store.CreateNotebook("其他词本", "").Id);
-            VocabularyEntry ReadCard(string id) => store.QueryEntries(new() { SearchKeyword = "coffee" }).Single(c => c.Id == id);
+            var other = store.AddOrUpdateFromDictionary(original, store.CreateNotebook("其他词本").Id);
+            VocabularyEntry ReadCard(string id) => store.QueryEntries(new()).Single(c => c.Id == id);
             var calls = 0;
             var service = new AiDictionaryService(() => { calls++; return new ReviewReply(); }, cache,
                 refreshCollectedEntries: (_, _) => throw new IOException("词本写入失败"), readerLanguageId: () => "zh-Hans");

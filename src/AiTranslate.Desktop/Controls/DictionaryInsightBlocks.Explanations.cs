@@ -34,7 +34,7 @@ internal static partial class DictionaryInsightBlocks
             if (!string.IsNullOrWhiteSpace(strategy.Explanation)) row.Children.Add(RichText.Create(strategy.Explanation, TextRole.Secondary));
             list.Children.Add(row);
         }
-        return RichBlocks.Callout("lightbulb-on-outline", list, RichBlocks.CalloutTone.Attention);
+        return RichBlocks.Callout("regular/lightbulb", list, RichBlocks.CalloutTone.Attention);
     }
 
     public static Control? ToneEvidence(IReadOnlyList<ToneEvidence> evidence) => evidence.Count == 0 ? null :

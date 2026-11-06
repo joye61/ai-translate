@@ -72,7 +72,7 @@ public static class AiProviders
     }
 }
 
-public class AiException(string message) : Exception(message);
+public class AiException(string message, Exception? innerException = null) : Exception(message, innerException);
 
 internal static class AiHttp
 {
@@ -96,7 +96,7 @@ internal static class AiHttp
             403 => "供应商拒绝访问，请检查账户权限与服务区域。",
             404 => "所选模型或 API 端点不可用，请在设置中检查模型名称。",
             429 => "请求过于频繁或额度不足，请稍后重试。",
-            503 => "当前翻译服务繁忙或维护中（HTTP 503）。请稍后重试，或在「引擎与快捷键」中切换服务商。",
+            503 => "当前翻译服务繁忙或维护中（HTTP 503）。请稍后重试，或在「应用设置」中切换服务商。",
             >= 500 => $"AI 供应商服务暂时不可用（HTTP {(int)response.StatusCode}），请稍后重试。",
             _ => $"AI 请求失败（HTTP {(int)response.StatusCode}）。"
         });

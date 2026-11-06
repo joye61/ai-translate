@@ -27,9 +27,11 @@ public sealed partial class AiDictionaryService
         {
             var run = new DictionaryRun(transport);
             stored = stored with { Processing = state with { Message = "", PolicyVersion = DictionaryProcessing.CurrentPolicyVersion } };
+            // Completed reviews retain their corrections for display, not as open problems.
+            IReadOnlyList<DictionaryQualityIssue> issues = state.Review == DictionaryStageState.Completed ? [] : state.Issues;
             var reviewed = resumeExtension
-                ? await FinishStagesAsync(run, stored, state.Issues, onPreview, cancellationToken).ConfigureAwait(false)
-                : await RunQualityReviewAsync(run, stored, state.Issues, cancellationToken).ConfigureAwait(false);
+                ? await FinishStagesAsync(run, stored, issues, onPreview, cancellationToken).ConfigureAwait(false)
+                : await RunQualityReviewAsync(run, stored, issues, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             reviewed = WithReviewSync(stored, reviewed with { Origin = DictionaryResultOrigin.Reviewed,
                 Processing = reviewed.Processing! with { Usage = run.Usage.ToArray() } });
@@ -63,6 +65,7 @@ public sealed partial class AiDictionaryService
     {
         private readonly AiRequestBudget _budget = new();
         public List<DictionaryStageUsage> Usage { get; } = [];
+        public bool TryReserveRetry() => _budget.TryReserveRetry();
 
         public async Task<AiCompletion> RequestAsync(string role, JsonObject[] messages, Action<string> preview,
             int outputLimit, CancellationToken token)
@@ -133,6 +136,7 @@ public sealed partial class AiDictionaryService
     private static JsonObject[] StageMessages(string role, string prompt, DictionaryEntryResult entry, string hash,
         HashSet<string> allowed, IReadOnlyList<DictionaryQualityIssue> issues)
     {
+        var content = ContentWire(entry);
         var data = new
         {
             role, baseHash = hash, source_text = entry.SourceText, context_sentence = entry.LookupContext,
@@ -141,7 +145,8 @@ public sealed partial class AiDictionaryService
             english_reference = entry.Processing?.Intent == DictionaryLookupIntent.Quick ? null : CoverageReference(entry), intent = entry.Processing?.Intent.ToString(),
             missing = entry.PrimaryRenderings().Where(t => !entry.TranslationOptions.Any(o => o.Text == t && o.Usage.Length > 0)),
             allowed_fields = allowed.Order(StringComparer.Ordinal),
-            entry = ContentWire(entry), issues
+            entry = content,
+            issues = issues.Where(issue => IssueIsAnchored(issue, entry.SourceText, content))
         };
         return [new() { ["role"] = "system", ["content"] = prompt + "\n只输出约定的 JSON 对象。" },
             new() { ["role"] = "user", ["content"] = JsonSerializer.Serialize(data, JsonSerializerOptions.Web) }];
@@ -158,7 +163,7 @@ public sealed partial class AiDictionaryService
         catch (Exception ex) when (ex is JsonException or InvalidOperationException or AiException) { return []; }
     }
 
-    private static DictionaryQualityIssue[] ReadIssues(JsonElement list, string source)
+    private static DictionaryQualityIssue[] ReadIssues(JsonElement list, string source, JsonObject? reviewedContent = null)
     {
         if (list.ValueKind != JsonValueKind.Array) throw InvalidStage();
         var issues = new List<DictionaryQualityIssue>();
@@ -170,12 +175,28 @@ public sealed partial class AiDictionaryService
             var reason = GetString(item, "reason").Trim();
             var severity = GetString(item, "severity");
             if (field.Length == 0 || quote.Length == 0 || reason.Length == 0 ||
-                !source.Contains(quote, StringComparison.Ordinal) || severity is not ("minor" or "major" or "critical"))
+                severity is not ("minor" or "major" or "critical"))
                 throw InvalidStage();
+            // An editor can cite an error in an existing example or explanation. Anchor it
+            // to that specific field in the input snapshot, never to newly proposed content.
+            if (!IssueIsAnchored(new(field, quote, reason, severity), source, reviewedContent))
+                throw InvalidStage("问题依据未引用原文或对应栏目的已有内容。");
             issues.Add(new(field, quote, reason, severity));
         }
         return issues.ToArray();
     }
+
+    private static bool IssueIsAnchored(DictionaryQualityIssue issue, string source, JsonObject? content) =>
+        !string.IsNullOrWhiteSpace(issue.SourceQuote) &&
+        (source.Contains(issue.SourceQuote, StringComparison.Ordinal) || ContainsQuote(content?[issue.Field], issue.SourceQuote));
+
+    private static bool ContainsQuote(JsonNode? node, string quote) => node switch
+    {
+        JsonValue value when value.TryGetValue<string>(out var text) => text.Contains(quote, StringComparison.Ordinal),
+        JsonObject obj => obj.Any(pair => ContainsQuote(pair.Value, quote)),
+        JsonArray array => array.Any(value => ContainsQuote(value, quote)),
+        _ => false
+    };
 
     private static bool HasSemanticRisk(DictionaryEntryResult entry, IReadOnlyList<DictionaryQualityIssue> issues)
     {
@@ -237,7 +258,7 @@ public sealed partial class AiDictionaryService
                     catch (Exception ex) when (IsStageError(ex)) { /* An incomplete field is not a commit. */ }
                 });
                 var reply = await run.RequestAsync("learning", messages, stream.Append, 6144, token).ConfigureAwait(false);
-                var proposal = ReadProposal(reply.Text, hash, entry.SourceText);
+                var proposal = ReadProposal(reply.Text, hash, entry.SourceText, ContentWire(entry));
                 if (proposal.LexicalAdditions is not null || proposal.ConfirmedFields.Length != 0 ||
                     proposal.Status is not ("completed" or "not_applicable" or "insufficient_evidence") ||
                     (proposal.Status != "completed" && proposal.Fields.Count != 0))
@@ -270,16 +291,20 @@ public sealed partial class AiDictionaryService
     private sealed record StageProposal(string Status, JsonObject Fields, DictionaryQualityIssue[] Issues,
         JsonObject? LexicalAdditions, string[] ConfirmedFields);
 
-    private static StageProposal ReadProposal(string raw, string expectedHash, string source)
+    private static StageProposal ReadProposal(string raw, string expectedHash, string source, JsonObject? reviewedContent = null)
     {
         var root = JsonNode.Parse(AiTranslationService.StripMarkdownCodeFence(raw)) as JsonObject;
-        if (root is null || root["baseHash"]?.GetValue<string>() != expectedHash ||
-            root["fields"] is not JsonObject fields || root["issues"] is not JsonArray list)
-            throw InvalidStage();
+        if (root is null || root["fields"] is not JsonObject fields || root["issues"] is not JsonArray list)
+            throw InvalidStage("AI 回复缺少 fields 对象或 issues 数组。");
+        if (root["baseHash"]?.GetValue<string>() != expectedHash)
+            throw InvalidStage("AI 回复的词条版本不匹配，baseHash 必须原样回传。");
         var status = root["status"]?.GetValue<string>() ?? throw InvalidStage();
+        // Some compatible models echo the response-format marker. It carries no edits.
+        if (root["type"] is JsonValue marker && marker.TryGetValue<string>(out var type) && type == "json_object")
+            root.Remove("type");
         if (root.Any(p => p.Key is not ("baseHash" or "status" or "fields" or "issues" or "confirmedFields" or "lexicalAdditions")))
-            throw InvalidStage();
-        return new(status, fields, ReadIssues(JsonSerializer.SerializeToElement(list), source),
+            throw InvalidStage("AI 回复含有约定外的顶层字段，仅允许 baseHash、status、fields、issues、confirmedFields 和 lexicalAdditions。");
+        return new(status, fields, ReadIssues(JsonSerializer.SerializeToElement(list), source, reviewedContent),
             root["lexicalAdditions"]?.AsObject(), root["confirmedFields"]?.Deserialize<string[]>() ?? []);
     }
 
@@ -292,56 +317,80 @@ public sealed partial class AiDictionaryService
             var hash = ContentHash(entry);
             var allowed = StageFields(entry, review: true);
             var messages = StageMessages("review", QualityReviewPrompt, entry, hash, allowed, issues);
-            var completion = await run.RequestAsync("review", messages, _ => { }, 6144, token).ConfigureAwait(false);
-            var reply = ReadProposal(completion.Text, hash, entry.SourceText);
-            if (reply.Status != "corrected" && (reply.LexicalAdditions is not null || reply.ConfirmedFields.Length != 0))
-                throw InvalidStage();
-            if (reply.LexicalAdditions is { } additions)
+            while (true)
             {
-                if (entry.ItemType.IsPassage() || state.Intent == DictionaryLookupIntent.Quick ||
-                    additions["senses"] is not JsonArray || additions["collocations"] is not JsonArray) throw InvalidStage();
-                var covered = MergeLexicalAdditions(entry, JsonSerializer.SerializeToElement(additions), entry.LookupContext.Length == 0,
-                    requireTranslationQuote: true, matchDefinition: entry.ReaderLanguage == entry.TargetLanguage && entry.TargetLanguage.StartsWith("zh", StringComparison.Ordinal));
-                var before = ContentWire(entry);
-                foreach (var (key, value) in ContentWire(covered))
-                    if (!JsonNode.DeepEquals(before[key], value) && !reply.Fields.ContainsKey(key)) reply.Fields[key] = value?.DeepClone();
+                var completion = await run.RequestAsync("review", messages, _ => { }, 6144, token).ConfigureAwait(false);
+                try { return ApplyQualityReview(entry, completion.Text, hash, allowed); }
+                catch (Exception ex) when (ex is StageValidationException or JsonException or InvalidOperationException or FormatException)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!run.TryReserveRetry()) throw;
+                    messages = [.. messages,
+                        new() { ["role"] = "assistant", ["content"] = completion.Text },
+                        new() { ["role"] = "user", ["content"] = JsonSerializer.Serialize(new
+                        {
+                            validation_error = ReviewFailureReason(ex),
+                            instruction = "上次回复未通过校验，尚未应用任何修改。基于同一个输入词条重新返回完整审校 JSON；原样回传 baseHash，问题引文仅来自原文或对应字段的已有内容，遵守字段与状态约定。"
+                        }) }];
+                }
             }
-            switch (reply.Status)
-            {
-                case "accepted" when reply.Fields.Count == 0 && reply.Issues.Length == 0:
-                    break;
-                case "corrected" when reply.Fields.Count > 0 && reply.Issues.Length > 0:
-                    if (!reply.Issues.Any(i => reply.Fields.ContainsKey(i.Field))) throw InvalidStage();
-                    var candidate = MergeReviewedFields(entry, allowed, reply.Fields, out var invalidated, reply.ConfirmedFields);
-                    if (MissingPlaceholders(candidate).Any()) throw InvalidStage();
-                    entry = candidate;
-                    if (invalidated)
-                        state = state with { Extension = DictionaryStageState.Invalidated, Message = "主译或义项已修正，已移除失效的关联内容。" };
-                    break;
-                case "unresolved" when reply.Issues.Length > 0 && reply.Fields.Count == 0:
-                    return entry with { Processing = state with { Review = DictionaryStageState.Unresolved,
-                        ReviewedContentHash = hash, Issues = reply.Issues, Message = reply.Issues[0].Reason } };
-                default: throw InvalidStage();
-            }
-            var missing = MissingPlaceholders(entry).ToArray();
-            if (missing.Length > 0)
-                return entry with { Processing = state with { Review = DictionaryStageState.Unresolved,
-                    ReviewedContentHash = ContentHash(entry), Issues = missing, Message = missing[0].Reason } };
-            var acceptedHash = ContentHash(entry);
-            return entry with { LexicalCoverageReviewed = !entry.ItemType.IsPassage(),
-                Processing = state with { Review = DictionaryStageState.Completed, ReviewedContentHash = acceptedHash,
-                    Issues = reply.Issues, SectionChecks = state.SectionChecks.Where(check => check.ContentHash == acceptedHash).ToArray() } };
         }
         catch (Exception ex) when (IsStageError(ex))
         {
             token.ThrowIfCancellationRequested();
             return entry with { Processing = state with { Review = DictionaryStageState.Failed,
-                ReviewedContentHash = "", Issues = issues, Message = "审校未完成，保留已生成的内容。" } };
+                ReviewedContentHash = "", Issues = issues,
+                Message = $"整条核对未完成：{ReviewFailureReason(ex).TrimEnd('。', ' ')}。已保留原内容，可重试。" } };
         }
     }
 
+    private static DictionaryEntryResult ApplyQualityReview(DictionaryEntryResult entry, string response, string hash, HashSet<string> allowed)
+    {
+        var state = entry.Processing ?? new() { Core = DictionaryStageState.Completed };
+        var reply = ReadProposal(response, hash, entry.SourceText, ContentWire(entry));
+        if (reply.Status != "corrected" && (reply.LexicalAdditions is not null || reply.ConfirmedFields.Length != 0))
+            throw InvalidStage();
+        if (reply.LexicalAdditions is { } additions)
+        {
+            if (entry.ItemType.IsPassage() || state.Intent == DictionaryLookupIntent.Quick ||
+                additions["senses"] is not JsonArray || additions["collocations"] is not JsonArray) throw InvalidStage();
+            var covered = MergeLexicalAdditions(entry, JsonSerializer.SerializeToElement(additions), entry.LookupContext.Length == 0,
+                requireTranslationQuote: true, matchDefinition: entry.ReaderLanguage == entry.TargetLanguage && entry.TargetLanguage.StartsWith("zh", StringComparison.Ordinal));
+            var before = ContentWire(entry);
+            foreach (var (key, value) in ContentWire(covered))
+                if (!JsonNode.DeepEquals(before[key], value) && !reply.Fields.ContainsKey(key)) reply.Fields[key] = value?.DeepClone();
+        }
+        switch (reply.Status)
+        {
+            case "accepted" when reply.Fields.Count == 0 && reply.Issues.Length == 0:
+                break;
+            case "corrected" when reply.Fields.Count > 0 && reply.Issues.Length > 0:
+                if (!reply.Issues.Any(i => reply.Fields.ContainsKey(i.Field))) throw InvalidStage();
+                var candidate = MergeReviewedFields(entry, allowed, reply.Fields, out var invalidated, reply.ConfirmedFields);
+                if (MissingPlaceholders(candidate).Any()) throw InvalidStage();
+                entry = candidate;
+                if (invalidated)
+                    state = state with { Extension = DictionaryStageState.Invalidated, Message = "主译或义项已修正，已移除失效的关联内容。" };
+                break;
+            case "unresolved" when reply.Issues.Length > 0 && reply.Fields.Count == 0:
+                return entry with { Processing = state with { Review = DictionaryStageState.Unresolved,
+                    ReviewedContentHash = hash, Issues = reply.Issues, Message = reply.Issues[0].Reason } };
+            default: throw InvalidStage();
+        }
+        var missing = MissingPlaceholders(entry).ToArray();
+        if (missing.Length > 0)
+            return entry with { Processing = state with { Review = DictionaryStageState.Unresolved,
+                ReviewedContentHash = ContentHash(entry), Issues = missing, Message = missing[0].Reason } };
+        var acceptedHash = ContentHash(entry);
+        return entry with { LexicalCoverageReviewed = !entry.ItemType.IsPassage(),
+            Processing = state with { Review = DictionaryStageState.Completed, ReviewedContentHash = acceptedHash,
+                Issues = reply.Issues, SectionChecks = state.SectionChecks.Where(check => check.ContentHash == acceptedHash).ToArray() } };
+    }
+
+    private static string ReviewFailureReason(Exception ex) => ex is AiException ? ex.Message : "AI 回复格式或字段不完整";
+    private sealed class StageValidationException(string message) : AiException(message);
     private static bool IsStageError(Exception ex) => ex is AiException or JsonException or InvalidOperationException or FormatException;
-    private static AiException InvalidStage() => new("回复的版本、证据或字段未通过校验。");
+    private static AiException InvalidStage(string message = "回复的版本、证据或字段未通过校验。") => new StageValidationException(message);
 
     private static DictionaryEntryResult MergeLearningFields(DictionaryEntryResult entry, HashSet<string> allowed, JsonObject fields)
     {

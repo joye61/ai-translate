@@ -40,6 +40,21 @@ public static class HueMap
 
     private static readonly Hue Again = new(AppTheme.Danger, AppTheme.DangerSoft, AppTheme.Danger);
 
+    /// <summary>Grammar categories keep one hue everywhere (article header, sentence points, library chips).</summary>
+    public static Hue GrammarCategory(string? category)
+    {
+        var name = category ?? "";
+        if (name.Contains("非谓语")) return AppTheme.Hues.Rose;
+        if (name.Contains("时态")) return AppTheme.Hues.Sky;
+        if (name.Contains("语态") || name.Contains("词类")) return AppTheme.Hues.Jade;
+        if (name.Contains("从句") || name.Contains("虚拟")) return AppTheme.Hues.Violet;
+        if (name.Contains("倒装") || name.Contains("强调")) return AppTheme.Hues.Rose;
+        if (name.Contains("情态") || name.Contains("句型") || name.Contains("句式")) return AppTheme.Hues.Honey;
+        if (name.Contains("冠词") || name.Contains("介词") || name.Contains("连词") || name.Contains("比较") || name.Contains("一致"))
+            return AppTheme.Hues.Sage;
+        return AppTheme.Hues.Neutral;
+    }
+
     public static Hue Rating(ReviewRating rating) => rating switch
     {
         ReviewRating.Again => Again,
@@ -48,14 +63,4 @@ public static class HueMap
         ReviewRating.Easy => AppTheme.Hues.Sky,
         _ => AppTheme.Hues.Neutral
     };
-
-    /// <summary>Stable hue for a user-created item such as a notebook (same id → same color across sessions).</summary>
-    public static Hue ForKey(string? key)
-    {
-        if (string.IsNullOrEmpty(key)) return AppTheme.Hues.Coral;
-        var hash = 0u;
-        foreach (var ch in key) hash = unchecked(hash * 31 + ch);
-        var rotation = AppTheme.Hues.Rotation;
-        return rotation[(int)(hash % (uint)rotation.Count)];
-    }
 }

@@ -83,7 +83,7 @@ internal static partial class DictionaryInsightBlocks
                 anchors.Children.Add(new Grid
                 {
                     ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = AppTheme.Space.S,
-                    Children = { new MdiIcon("arrow-right", 14, AppTheme.TextMuted)
+                    Children = { new FontAwesomeIcon("arrow-right", 14, AppTheme.TextMuted)
                         { VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 4, 0, 0) }, target }
                 });
             }
@@ -114,7 +114,10 @@ internal static partial class DictionaryInsightBlocks
         return list;
     }
 
-    public static Control? Grammar(IReadOnlyList<GrammarHighlight> highlights)
+    //  [过去进行时] was reading                  ← label · quoted span
+    //  怎么构成、在本句起什么作用…
+    //  🎓 精解「过去进行时」  ✓ 已收录            ← opens the grammar studio (library first)
+    public static Control? Grammar(IReadOnlyList<GrammarHighlight> highlights, string language = "en", bool linked = false)
     {
         if (highlights.Count == 0) return null;
         return RichBlocks.RuledRows(highlights.Select(h =>
@@ -125,6 +128,22 @@ internal static partial class DictionaryInsightBlocks
             if (!string.IsNullOrWhiteSpace(h.Quote)) head.Children.Add(TextStyles.Selectable(h.Quote, TextRole.ExampleSource));
             var analysis = new StackPanel { Spacing = AppTheme.Space.XS, Children = { head } };
             if (!string.IsNullOrWhiteSpace(h.Explanation)) analysis.Children.Add(RichText.Create(h.Explanation, TextRole.Secondary));
+            if (linked && GrammarLinks.Available && GrammarLinks.TopicOf(h) is { Length: > 0 } topic)
+            {
+                var open = StudioUi.CreateCompactButton("graduation-cap", $"精解「{topic}」", () => GrammarLinks.Open!(topic, language));
+                open.Margin = new Thickness(-AppTheme.Space.S, 0, 0, 0);
+                var known = GrammarLinks.Knows(topic, language);
+                ToolTip.SetTip(open, known ? "已在本地语法库，秒开" : "进入语法精解，由 AI 现场讲解并存入本地语法库");
+                var footer = new StackPanel { Orientation = Orientation.Horizontal, Spacing = AppTheme.Space.XS, Children = { open } };
+                if (known)
+                {
+                    var note = TextStyles.Create("已收录", TextRole.Meta, wrap: false);
+                    note.VerticalAlignment = VerticalAlignment.Center;
+                    footer.Children.Add(GrammarBlocks.KnownMark());
+                    footer.Children.Add(note);
+                }
+                analysis.Children.Add(footer);
+            }
             return analysis;
         }));
     }
@@ -291,12 +310,12 @@ internal static partial class DictionaryInsightBlocks
                 StrokeThickness = 1, StrokeThicknessUnit = TextDecorationUnit.Pixel
             }];
             var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = AppTheme.Space.S, RowSpacing = 3 };
-            AddLine(0, "close-circle", AppTheme.Danger, wrong);
+            AddLine(0, "circle-xmark", AppTheme.Danger, wrong);
             if (!string.IsNullOrWhiteSpace(m.Right))
             {
                 var right = TextStyles.Selectable(m.Right, TextRole.Term);
                 right.Foreground = AppTheme.Hues.Sage.Ink;
-                AddLine(1, "check-circle", AppTheme.Hues.Sage.Ink, right);
+                AddLine(1, "circle-check", AppTheme.Hues.Sage.Ink, right);
             }
             if (!string.IsNullOrWhiteSpace(m.Why))
             {
@@ -321,7 +340,7 @@ internal static partial class DictionaryInsightBlocks
                 const double iconSize = 15;
                 // The visible letters sit slightly below the center of the first line box.
                 var iconTop = (text.LineHeight - iconSize) / 2 + 1.5;
-                var glyph = new MdiIcon(icon, iconSize, brush)
+                var glyph = new FontAwesomeIcon(icon, iconSize, brush)
                 {
                     VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, iconTop, 0, 0)
                 };
@@ -362,7 +381,7 @@ internal static partial class DictionaryInsightBlocks
 
     private static Button CopyButton(Action copy)
     {
-        var button = StudioUi.CreateCompactButton("content-copy", "复制", () => { });
+        var button = StudioUi.CreateCompactButton("regular/copy", "复制", () => { });
         button.VerticalAlignment = VerticalAlignment.Top;
         ToolTip.SetTip(button, "复制这条译文");
         button.Click += (_, _) =>

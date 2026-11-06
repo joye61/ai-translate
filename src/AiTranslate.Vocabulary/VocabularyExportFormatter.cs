@@ -26,9 +26,7 @@ internal static class VocabularyExportFormatter
                 sb.AppendLine($"- **自然译文**：{item.Translation}");
                 sb.AppendLine($"- **直译对照**：{item.LiteralTranslation}");
             }
-            sb.AppendLine($"- **类型**：`{item.ItemType}` · **掌握度**：{new string('★', item.MasteryLevel)}{new string('☆', 5 - item.MasteryLevel)} ({item.Stage})");
-            if (item.Tags.Count > 0)
-                sb.AppendLine($"- **标签**：{string.Join(", ", item.Tags.Select(t => $"`#{t}`"))}");
+            sb.AppendLine($"- **类型**：`{item.ItemType}`");
             if (!string.IsNullOrWhiteSpace(item.EtymologyAndRoot))
                 sb.AppendLine($"- **词根词源**：{item.EtymologyAndRoot}");
             if (!string.IsNullOrWhiteSpace(item.MemoryMnemonic))
@@ -41,8 +39,6 @@ internal static class VocabularyExportFormatter
                 foreach (var ex in item.Examples)
                     sb.AppendLine($"  - *{ex.SourceSentence}* — {ex.TranslatedSentence}");
             }
-            if (!string.IsNullOrWhiteSpace(item.UserPersonalNote))
-                sb.AppendLine($"- **个人笔记**：{item.UserPersonalNote}");
             foreach (var note in LearningNotes(item)) sb.AppendLine($"- {note}");
             sb.AppendLine();
         }
@@ -54,7 +50,7 @@ internal static class VocabularyExportFormatter
         var sb = new StringBuilder();
         sb.AppendLine("#separator:tab");
         sb.AppendLine("#html:true");
-        sb.AppendLine("#columns:Front\tBack\tPhonetic\tMnemonic\tExample\tTags");
+        sb.AppendLine("#columns:Front\tBack\tPhonetic\tMnemonic\tExample");
         foreach (var item in items)
         {
             static string Clean(string s) => s.Replace("\t", " ").Replace("\r", "").Replace("\n", "<br>");
@@ -65,8 +61,7 @@ internal static class VocabularyExportFormatter
                   string.Concat(LearningNotes(item, includeMnemonics: false).Select(note => "\n" + System.Net.WebUtility.HtmlEncode(note))))).Append('\t')
               .Append(Clean(item.UsPhonetic)).Append('\t')
               .Append(Clean(System.Net.WebUtility.HtmlEncode(MnemonicText(item)))).Append('\t')
-              .Append(Clean(example)).Append('\t')
-              .AppendLine(Clean(string.Join(" ", item.Tags)));
+              .AppendLine(Clean(example));
         }
         return sb.ToString();
     }
@@ -74,7 +69,7 @@ internal static class VocabularyExportFormatter
     public static string ToCsv(IReadOnlyList<VocabularyEntry> items)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Headword,Phonetic,Translation,ItemType,Stage,MasteryLevel,Etymology,Mnemonic,ContextSentence,PersonalNote,Tags,LiteralTranslation,LearningNotes");
+        sb.AppendLine("Headword,Phonetic,Translation,ItemType,Etymology,Mnemonic,ContextSentence,LiteralTranslation,LearningNotes");
         static string CsvEscape(string s) => $"\"{s.Replace("\"", "\"\"")}\"";
         foreach (var item in items)
         {
@@ -83,13 +78,9 @@ internal static class VocabularyExportFormatter
                 CsvEscape(item.UsPhonetic),
                 CsvEscape(item.Translation),
                 CsvEscape(item.ItemType.ToString()),
-                CsvEscape(item.Stage.ToString()),
-                item.MasteryLevel,
                 CsvEscape(EtymologyText(item)),
                 CsvEscape(MnemonicText(item)),
                 CsvEscape(item.ContextSentence),
-                CsvEscape(item.UserPersonalNote),
-                CsvEscape(string.Join(";", item.Tags)),
                 CsvEscape(item.LiteralTranslation ?? ""),
                 CsvEscape(string.Join("\n", LearningNotes(item, includeMnemonics: false, includeEtymology: false)))));
         }

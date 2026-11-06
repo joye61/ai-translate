@@ -25,10 +25,10 @@ public sealed class DictionaryBlockReviewTests
         {
             var cache = new DictionaryEntryCache(Path.Combine(dir.FullName, "lookup.db"));
             var cards = new VocabularyService(Path.Combine(dir.FullName, "cards.json"));
-            var card = cards.AddOrUpdateFromDictionary(Coffee, contextSentence: Coffee.LookupContext,
-                sourceTitle: "菜单", userNote: "点单");
+            var card = cards.AddOrUpdateFromDictionary(Coffee, contextSentence: Coffee.LookupContext, sourceTitle: "菜单");
+            card = cards.SaveEntry(card with { UserPersonalNote = "点单" });
             var progress = cards.SubmitReview(card.Id, ReviewRating.Good);
-            var otherBook = cards.CreateNotebook("听力", "");
+            var otherBook = cards.CreateNotebook("听力");
             var otherCard = cards.AddOrUpdateFromDictionary(Coffee, otherBook.Id);
             BilingualExample personalExample = new("Is there coffee?", "有咖啡吗？");
             cards.SaveEntry(otherCard with { Examples = [personalExample] });
@@ -56,7 +56,7 @@ public sealed class DictionaryBlockReviewTests
             var reopened = await offline.LookupOrTranslateAsync("coffee", "zh-Hans", Coffee.LookupContext);
             Assert.Equal(updated.Senses, reopened.Senses);
             Assert.Equal(updated.CacheStamp, reopened.CacheStamp);
-            var reopenedCards = new VocabularyService(Path.Combine(dir.FullName, "cards.json")).QueryEntries(new() { SearchKeyword = "coffee" });
+            var reopenedCards = new VocabularyService(Path.Combine(dir.FullName, "cards.json")).QueryEntries(new());
             var saved = reopenedCards.Single(c => c.Id == card.Id);
             Assert.Equal(personalExample, Assert.Single(reopenedCards.Single(c => c.Id == otherCard.Id).Examples));
             Assert.Equal(updated.CacheStamp, saved.ToDictionaryResult().CacheStamp);
@@ -84,7 +84,8 @@ public sealed class DictionaryBlockReviewTests
             var cache = new DictionaryEntryCache(Path.Combine(dir.FullName, "lookup.db"));
             var path = Path.Combine(dir.FullName, "cards.json");
             var cards = new VocabularyService(path);
-            var card = cards.AddOrUpdateFromDictionary(entry, contextSentence: entry.LookupContext, sourceTitle: "课堂", userNote: "听力");
+            var card = cards.AddOrUpdateFromDictionary(entry, contextSentence: entry.LookupContext, sourceTitle: "课堂");
+            card = cards.SaveEntry(card with { UserPersonalNote = "听力" });
             var progress = cards.SubmitReview(card.Id, ReviewRating.Good);
             var service = new AiDictionaryService(() => new Reply(payload =>
             {
@@ -290,9 +291,11 @@ public sealed class DictionaryBlockReviewTests
             var frames = new List<DictionaryEntryResult>();
             var service = new AiDictionaryService(() => new StreamReply(emit =>
             {
+                var previousFrames = frames.Count;
                 const string start = """{"status":"improved","edits":[{"path":"/senses/0/definitionZh","value":"咖啡（""";
                 emit(start);
-                Assert.Equal("咖啡（", Assert.Single(frames).Senses[0].DefinitionZh);
+                Assert.Equal(previousFrames + 1, frames.Count);
+                Assert.Equal("咖啡（", frames[^1].Senses[0].DefinitionZh);
                 const string next = """饮品）"}""";
                 emit(next);
                 Assert.Equal("咖啡（饮品）", frames[^1].Senses[0].DefinitionZh);

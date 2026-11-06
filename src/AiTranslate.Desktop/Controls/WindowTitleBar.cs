@@ -32,15 +32,15 @@ internal static class WindowTitleBar
         };
         buttons.Classes.Set("traffic-lights", mac);
 
-        var close = CreateButton(WindowDecorationsElementRole.CloseButton, new MdiIcon("close"), "关闭",
+        var close = CreateButton(WindowDecorationsElementRole.CloseButton, new FontAwesomeIcon("xmark"), "关闭",
             window.Close, AppTheme.MacClose);
         if (mac) buttons.Children.Add(close);
         if (window.CanMinimize)
-            buttons.Children.Add(CreateButton(WindowDecorationsElementRole.MinimizeButton, new MdiIcon("window-minimize"),
+            buttons.Children.Add(CreateButton(WindowDecorationsElementRole.MinimizeButton, new FontAwesomeIcon("window-minimize"),
                 "最小化", () => window.WindowState = WindowState.Minimized, AppTheme.MacMinimize));
         if (window.CanMaximize)
         {
-            var icon = new MdiIcon();
+            var icon = new FontAwesomeIcon();
             var expanded = mac ? WindowState.FullScreen : WindowState.Maximized;
             var toggle = CreateButton(mac ? WindowDecorationsElementRole.FullScreenButton : WindowDecorationsElementRole.MaximizeButton,
                 icon, mac ? "进入全屏" : "最大化", () =>
@@ -48,7 +48,7 @@ internal static class WindowTitleBar
             void UpdateToggle()
             {
                 var restore = window.WindowState == expanded;
-                icon.IconName = mac ? (restore ? "arrow-collapse" : "arrow-expand") : (restore ? "window-restore" : "window-maximize");
+                icon.IconName = mac ? (restore ? "compress" : "expand") : (restore ? "regular/window-restore" : "regular/window-maximize");
                 SetLabel(toggle, mac ? (restore ? "退出全屏" : "进入全屏") : (restore ? "还原" : "最大化"));
             }
             UpdateToggle();
@@ -132,7 +132,7 @@ internal static class WindowTitleBar
         });
     }
 
-    private static Button CreateButton(WindowDecorationsElementRole role, MdiIcon icon, string label, Action click, IBrush light)
+    private static Button CreateButton(WindowDecorationsElementRole role, FontAwesomeIcon icon, string label, Action click, IBrush light)
     {
         var mac = OperatingSystem.IsMacOS();
         icon.IconSize = mac ? 10 : 16;

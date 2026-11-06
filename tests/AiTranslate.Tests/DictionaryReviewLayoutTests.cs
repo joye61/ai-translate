@@ -224,7 +224,7 @@ public sealed class DictionaryReviewLayoutTests
                 Assert.True(cache.TryAdd("fixture", new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡",
                     Senses = [new("n.", "旧释义")] }, 1));
                 var original = cache.Read("fixture")!;
-                var book = store.CreateNotebook("复核验收", "");
+                var book = store.CreateNotebook("复核验收");
                 store.AddOrUpdateFromDictionary(original, book.Id);
                 var service = new AiDictionaryService(() => new ReviewedNotebookSyncTests.ReviewReply(), cache,
                     refreshCollectedEntries: (_, _) => throw new UnauthorizedAccessException("词本只读"));
@@ -239,7 +239,7 @@ public sealed class DictionaryReviewLayoutTests
                     if (inNotebook)
                     {
                         var vault = new VocabularyVaultView(store, speech, settings, (_, _, _, _, _) => { },
-                            _ => { }, _ => { }, s => status = s, service);
+                            s => status = s, service);
                         window.Content = vault;
                         window.Show();
                         vault.RefreshAll();

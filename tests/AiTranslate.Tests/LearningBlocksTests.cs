@@ -83,8 +83,8 @@ public sealed class LearningBlocksTests
             var path = Path.Combine(folder.FullName, "cards.json");
             var cards = new VocabularyService(path);
             var original = Entry() with { LookupContext = "Please stop the music." };
-            var collected = cards.AddOrUpdateFromDictionary(original, contextSentence: original.LookupContext,
-                sourceTitle: "课堂", userNote: "练习停止与停留");
+            var collected = cards.AddOrUpdateFromDictionary(original, contextSentence: original.LookupContext, sourceTitle: "课堂");
+            collected = cards.SaveEntry(collected with { UserPersonalNote = "练习停止与停留" });
             var progress = cards.SubmitReview(collected.Id, ReviewRating.Good);
             var service = new AiDictionaryService(() => new Reply("""
                 {"status":"improved","edits":[{"path":"/usageGuidance/-","value":
@@ -105,7 +105,7 @@ public sealed class LearningBlocksTests
             Assert.Equal("课堂", saved.SourceTitle);
             Assert.Equal(original.LookupContext, saved.ContextSentence);
             Assert.Equal("练习停止与停留", saved.UserPersonalNote);
-            var filter = new VocabularyQueryFilter { SearchKeyword = "stop" };
+            var filter = new VocabularyQueryFilter();
             foreach (var export in new[] { reopened.ExportToCsv(filter), reopened.ExportToAnkiTsv(filter), reopened.ExportToMarkdown(filter) })
             {
                 Assert.Contains("词首辅音群", export);

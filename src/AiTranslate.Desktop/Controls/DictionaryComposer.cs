@@ -15,13 +15,16 @@ namespace AiTranslate.Desktop.Controls;
 
 internal enum ComposerActivity { Ready, Translating, Reviewing }
 
+/// <summary>Wording and left-hand control of a composer, so the grammar studio can reuse the translation input without its language picker.</summary>
+internal sealed record ComposerProfile(string Prompt, string InputName, string SendLabel, Control? Lead = null);
+
 internal sealed class DictionaryComposer : Grid
 {
-    private const string InputPrompt = "输入要翻译的单词、短语或段落…";
+    private readonly string _prompt;
+    private readonly string _sendLabel;
     private readonly SuggestingTextBox _input = new()
     {
         Classes = { "chat-input" },
-        PlaceholderText = InputPrompt,
         AcceptsReturn = true, TextWrapping = TextWrapping.Wrap,
         MinHeight = 48, MaxHeight = 168,
         FontSize = AppTheme.Type.BodyLarge, Foreground = AppTheme.TextPrimary,
@@ -30,7 +33,7 @@ internal sealed class DictionaryComposer : Grid
     private readonly ComboBox _language;
     private readonly Button _send;
     private readonly TextBlock _hint = TextStyles.Create("Tab 补全  ·  Enter 发送  ·  Shift + Enter 换行", TextRole.Meta, wrap: false);
-    private readonly MdiIcon _sendIcon = new("arrow-up", 20, AppTheme.CardBg);
+    private readonly FontAwesomeIcon _sendIcon = new("arrow-up", 20, AppTheme.CardBg);
     private readonly FlowingBorderEffect _flow = new();
     private ComposerActivity _activity;
 
@@ -38,16 +41,19 @@ internal sealed class DictionaryComposer : Grid
     public void FocusInput() => _input.Focus();
 
     public DictionaryComposer(AppSettingsStore settings, Func<string, string, CancellationToken, Task<string?>> findSuggestion,
-        Action<string, bool> submit, Action stop)
+        Action<string, bool> submit, Action stop, ComposerProfile? profile = null)
     {
-        AutomationProperties.SetName(_input, "待翻译文本");
+        _prompt = profile?.Prompt ?? "输入要翻译的单词、短语或段落…";
+        _sendLabel = profile?.SendLabel ?? "发送翻译";
+        _input.PlaceholderText = _prompt;
+        AutomationProperties.SetName(_input, profile?.InputName ?? "待翻译文本");
         var initialMode = DictionaryTranslationDirection.GetMode(settings.Current);
         _language = new ComboBox
         {
             Classes = { "chip" }, MinWidth = 120,
             ItemsSource = DictionaryTranslationDirection.Modes,
             ItemTemplate = new FuncDataTemplate<TranslationLanguage>((item, _) => Label(item?.DisplayName)),
-            SelectionBoxItemTemplate = new FuncDataTemplate<TranslationLanguage>((item, _) => ChipLabel("translate", item?.DisplayName)),
+            SelectionBoxItemTemplate = new FuncDataTemplate<TranslationLanguage>((item, _) => ChipLabel("language", item?.DisplayName)),
             SelectedItem = DictionaryTranslationDirection.Modes.First(m => m.Id == initialMode)
         };
         _input.FindSuggestion = (prefix, token) => findSuggestion(prefix, LanguageId ?? initialMode, token);
@@ -100,11 +106,12 @@ internal sealed class DictionaryComposer : Grid
         _input.GotFocus += (_, _) => _hint.Opacity = 1;
         _input.LostFocus += (_, _) => _hint.Opacity = 0.6;
         _hint.Opacity = 0.6;
+        var lead = profile?.Lead ?? _language;
         var footer = new Grid
         {
             Margin = AppTheme.ScrollContentInset,
             ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = AppTheme.Space.M,
-            Children = { _language, _hint, _send }
+            Children = { lead, _hint, _send }
         };
         Grid.SetColumn(_hint, 1);
         Grid.SetColumn(_send, 2);
@@ -129,7 +136,7 @@ internal sealed class DictionaryComposer : Grid
     {
         _activity = activity;
         _flow.IsVisible = activity != ComposerActivity.Ready;
-        _input.PlaceholderText = progress ?? InputPrompt;
+        _input.PlaceholderText = progress ?? _prompt;
         UpdateAction();
     }
 
@@ -138,9 +145,10 @@ internal sealed class DictionaryComposer : Grid
         var hasText = DictionaryQuery.HasContent(_input.Text);
         var stop = _activity != ComposerActivity.Ready && !hasText;
         _sendIcon.IconName = stop ? "stop" : "arrow-up";
-        var label = !stop ? "发送翻译" : _activity == ComposerActivity.Reviewing ? "停止复核" : "停止生成";
+        _sendIcon.IconSize = stop ? 16 : 20;
+        var label = !stop ? _sendLabel : _activity == ComposerActivity.Reviewing ? "停止复核" : "停止生成";
         AutomationProperties.SetName(_send, label);
-        ToolTip.SetTip(_send, stop ? label : "发送翻译 (Enter) · Shift+Enter 换行");
+        ToolTip.SetTip(_send, stop ? label : $"{_sendLabel} (Enter) · Shift+Enter 换行");
         _send.IsEnabled = stop || hasText;
         _sendIcon.Foreground = _send.IsEnabled ? AppTheme.CardBg : AppTheme.TextMuted;
     }
@@ -150,7 +158,7 @@ internal sealed class DictionaryComposer : Grid
         Orientation = Orientation.Horizontal, Spacing = AppTheme.Space.XS,
         Children =
         {
-            new MdiIcon(icon, 14, AppTheme.TextSecondary) { VerticalAlignment = VerticalAlignment.Center },
+            new FontAwesomeIcon(icon, 14, AppTheme.TextSecondary) { VerticalAlignment = VerticalAlignment.Center },
             new TextBlock
             {
                 Text = text, FontSize = AppTheme.Type.Small, Foreground = AppTheme.TextPrimary,

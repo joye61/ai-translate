@@ -72,6 +72,7 @@ public sealed class UsageContrastTests
             var seed = Assert.Single(BuiltInShowcaseLexicon.All, e => e.SourceText == "ephemeral");
             Assert.Equal(["more ephemeral", "most ephemeral"], seed.Inflections.Select(f => f.Value));
             Assert.Contains(seed.WordFamily, f => f.Value == "ephemerality");
+            words.AddOrUpdateFromDictionary(seed);
             Assert.Equal(seed.WordFamily, words.FindByHeadword("ephemeral")!.WordFamily);
         }
         finally { dir.Delete(true); }

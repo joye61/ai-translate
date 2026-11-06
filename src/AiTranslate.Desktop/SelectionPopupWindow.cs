@@ -95,9 +95,9 @@ public sealed class SelectionPopupWindow : Window
             RefreshBookmark();
         });
 
-        var expandBtn = CreateIconButton("book-open-variant", "在主界面深度打开", () => Expand(null, null));
+        var expandBtn = CreateIconButton("book-open", "在主界面深度打开", () => Expand(null, null));
 
-        var copyBtn = CreateIconButton("content-copy", "复制译文", async () =>
+        var copyBtn = CreateIconButton("regular/copy", "复制译文", async () =>
         {
             if (_currentResult is not null && Clipboard is not null)
             {
@@ -106,8 +106,8 @@ public sealed class SelectionPopupWindow : Window
             }
         });
 
-        var closeBtn = CreateIconButton("close", "关闭弹窗 (Esc)", Hide);
-        var refreshBtn = CreateIconButton("refresh", "重新用 AI 翻译", () =>
+        var closeBtn = CreateIconButton("xmark", "关闭弹窗 (Esc)", Hide);
+        var refreshBtn = CreateIconButton("arrows-rotate", "重新用 AI 翻译", () =>
         {
             if (_currentCapture is { } capture && _currentResult is { } result)
                 _ = ShowAndTranslateAsync(capture, forceRefresh: true, result.TargetLanguage);
@@ -127,7 +127,7 @@ public sealed class SelectionPopupWindow : Window
                     VerticalAlignment = VerticalAlignment.Center,
                     Children =
                     {
-                        new MdiIcon("translate", 16, AppTheme.AccentBright),
+                        new FontAwesomeIcon("language", 16, AppTheme.AccentBright),
                         _sourceTagText
                     }
                 }
@@ -426,7 +426,7 @@ public sealed class SelectionPopupWindow : Window
             BorderThickness = new Thickness(0),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Content = new MdiIcon(icon, 16, AppTheme.TextSecondary)
+            Content = new FontAwesomeIcon(icon, 16, AppTheme.TextSecondary)
         };
         ToolTip.SetTip(btn, tooltip);
         btn.Click += (_, _) => onClick();

@@ -44,7 +44,7 @@ public sealed class WordFormationReviewTests
             Assert.Contains(frames, draft => draft.Morphemes.Count == 2);
             var offline = new AiDictionaryService(() => throw new Exception("unexpected lookup"), cache, readerLanguageId: () => "zh-Hans");
             Assert.Equal(reviewed.Morphemes, (await offline.LookupOrTranslateAsync("plenty", "zh-Hans")).Morphemes);
-            var reopened = new VocabularyService(cardPath).QueryEntries(new() { SearchKeyword = "plenty" }).Single(c => c.Id == card.Id);
+            var reopened = new VocabularyService(cardPath).QueryEntries(new()).Single(c => c.Id == card.Id);
             Assert.Equal(reviewed.Morphemes, reopened.ToDictionaryResult().Morphemes);
             Assert.Equal("课本", reopened.SourceTitle);
         }

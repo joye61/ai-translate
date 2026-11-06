@@ -322,4 +322,38 @@ public sealed class DictionaryReadingTests
             }
         }, CancellationToken.None);
     }
+
+    [Fact]
+    public async Task RightClickSelectionGoesThroughTheShellRouterBeforeLookingUp()
+    {
+        await using var session = HeadlessUnitTestSession.StartNew(typeof(DictionaryInputTests));
+        await session.Dispatch(() =>
+        {
+            const string source = "Stay close.";
+            var queries = new List<(string, string)>();
+            var routed = new List<(string, Action)>();
+            var reader = new DictionaryReadingText(source, (term, context) => queries.Add((term, context)), []);
+            var window = new Window { Content = reader, Width = 500, Height = 90 };
+            window.Show();
+            DictionaryReadingText.SelectionRouter = (query, _, open) => routed.Add((query, open));
+            try
+            {
+                window.UpdateLayout();
+                reader.SelectionStart = source.IndexOf("close", StringComparison.Ordinal);
+                reader.SelectionEnd = reader.SelectionStart + 5;
+                reader.RaiseEvent(new ContextRequestedEventArgs());
+                Assert.Empty(queries);
+                var (query, open) = Assert.Single(routed);
+                Assert.Equal("close", query);
+
+                open();
+                Assert.Equal(("close", "Stay close."), Assert.Single(queries));
+            }
+            finally
+            {
+                DictionaryReadingText.SelectionRouter = null;
+                window.Close();
+            }
+        }, CancellationToken.None);
+    }
 }

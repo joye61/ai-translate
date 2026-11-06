@@ -12,8 +12,8 @@ namespace AiTranslate.Desktop.Controls;
 /// Reusable KokoroSharp Phonics & Multi-Accent Speech Bar:
 /// - US Pronunciation (`volume-high`, IPA badge)
 /// - UK Pronunciation (`volume-high`, IPA badge)
-/// - Natural Phonics Syllable Breakdown (`waveform` 自然拼读音节拆解领读)
-/// - Slow Shadow-Reading (`speedometer-slow` 0.68x 慢速跟读)
+/// - Natural Phonics Syllable Breakdown (`wave-square` 自然拼读音节拆解领读)
+/// - Slow Shadow-Reading (`gauge` 0.68x 慢速跟读)
 /// - Vocabulary Memory Loop (`repeat` 美音→英音→原句磨耳朵循环读)
 /// </summary>
 public static class PhonicsAudioBar
@@ -107,7 +107,7 @@ public static class PhonicsAudioBar
             var syllableHint = syllables.Count > 1 && !compact && headword.Length <= 18
                 ? $"自然拼读 [{string.Join("·", syllables)}]"
                 : "自然拼读";
-            wrap.Children.Add(CreateSpeechPill("waveform", syllableHint,
+            wrap.Children.Add(CreateSpeechPill("wave-square", syllableHint,
                 playback => speech.SpeakPhonicsBreakdownAsync(headword, usIpa, SpeechAccent.AmericanEnglish, playback: playback)));
         }
 
@@ -115,7 +115,7 @@ public static class PhonicsAudioBar
         {
             // 4. 0.68x Slow Shadow-Reading (慢速精听跟读)
             wrap.Children.Add(CreateSpeechPill(
-                "speedometer-slow",
+                "gauge",
                 "0.7x 慢读跟读",
                 playback => speech.SpeakAsync(
                     headword,
@@ -155,7 +155,7 @@ public static class PhonicsAudioBar
         PronunciationDrill drill, SpeechAccent accent, bool slow)
     {
         var label = slow ? "慢速跟读" : "示范朗读";
-        var button = CreateSpeechPill(slow ? "speedometer-slow" : "volume-high", label,
+        var button = CreateSpeechPill(slow ? "gauge" : "volume-high", label,
             playback => speech.SpeakAsync(drill.Text, accent, ipaPhonetic: null,
                 speed: slow ? 0.68f : settings.Current.SpeechSpeed,
                 preferredVoiceId: accent == SpeechAccent.AmericanEnglish ? settings.Current.PreferredUsVoiceId : null,
@@ -165,10 +165,10 @@ public static class PhonicsAudioBar
         return button;
     }
 
-    private static Button CreateSpeechPill(string mdiIcon, string text, Func<SpeechPlayback, Task> speak, SpeechPlayback? playback = null) =>
-        SpeechPlaybackButton.Create(click => BuildPill(mdiIcon, text, click), speak, playback);
+    private static Button CreateSpeechPill(string icon, string text, Func<SpeechPlayback, Task> speak, SpeechPlayback? playback = null) =>
+        SpeechPlaybackButton.Create(click => BuildPill(icon, text, click), speak, playback);
 
-    private static Button BuildPill(string mdiIcon, string text, Action onClick)
+    private static Button BuildPill(string icon, string text, Action onClick)
     {
         var btn = new Button
         {
@@ -184,7 +184,7 @@ public static class PhonicsAudioBar
                 Spacing = 6,
                 Children =
                 {
-                    new MdiIcon(mdiIcon, 14, AppTheme.TextSecondary),
+                    new FontAwesomeIcon(icon, 14, AppTheme.TextSecondary),
                     TextStyles.Apply(new TextBlock
                     {
                         Text = text,

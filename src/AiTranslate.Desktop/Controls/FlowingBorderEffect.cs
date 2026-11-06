@@ -9,7 +9,7 @@ namespace AiTranslate.Desktop.Controls;
 /// <summary>A coral stroke moves at uniform speed along the composer's rounded outline.</summary>
 internal sealed class FlowingBorderEffect : Control
 {
-    private const double Stroke = 3;
+    private const double Stroke = 1;
     private const double SecondsPerLap = 2.6;
     private const double TrailFraction = .28;
     private static readonly Pen Track = new(AppTheme.FlowTrack, Stroke);

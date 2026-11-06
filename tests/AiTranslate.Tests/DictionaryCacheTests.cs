@@ -190,7 +190,8 @@ public sealed class DictionaryCacheTests
         {
             var vocab = new VocabularyService(Path.Combine(dir.FullName, "words.json"));
             var term = new DictionaryEntryResult { SourceText = "charge port", PrimaryTranslation = "充电端口", ItemType = VocabularyItemType.TechnicalTerm };
-            var saved = vocab.AddOrUpdateFromDictionary(term, userNote: "private note");
+            var saved = vocab.AddOrUpdateFromDictionary(term);
+            saved = vocab.SaveEntry(saved with { UserPersonalNote = "private note" });
             const string input = "Check the charge port.";
             var requests = 0;
             var cache = new DictionaryEntryCache(Path.Combine(dir.FullName, "cache.sqlite3"));
@@ -261,10 +262,11 @@ public sealed class DictionaryCacheTests
             const string context = "We sat by the water.";
             var first = await Service("河岸").LookupOrTranslateAsync("bank", "zh-Hans", context);
             var cached = await Service("unused").LookupOrTranslateAsync("bank", "zh-Hans", context);
-            var secondBook = vocab.CreateNotebook("阅读", "");
-            var card = vocab.AddOrUpdateFromDictionary(cached, contextSentence: context, userNote: "我的笔记");
+            var secondBook = vocab.CreateNotebook("阅读");
+            var card = vocab.AddOrUpdateFromDictionary(cached, contextSentence: context);
+            // Notes and stars from earlier versions stay in the saved card even though nothing edits them now.
+            card = vocab.SaveEntry(card with { UserPersonalNote = "我的笔记", IsStarred = true });
             var other = vocab.AddOrUpdateFromDictionary(first, secondBook.Id);
-            vocab.ToggleStar(card.Id);
             var reviewed = vocab.SubmitReview(card.Id, ReviewRating.Good);
             var bank = await Service("银行").LookupOrTranslateAsync("bank", "zh-Hans", "She deposited cash.");
             var separate = vocab.AddOrUpdateFromDictionary(bank);
@@ -273,7 +275,7 @@ public sealed class DictionaryCacheTests
             vocab.RefreshCollectedEntries(first, first.CacheStamp!.Revision); // a late notification
             await Assert.ThrowsAsync<AiException>(() => new AiDictionaryService(() => null, cache,
                 refreshCollectedEntries: vocab.RefreshCollectedEntries).LookupOrTranslateAsync("bank", "zh-Hans", context, forceRefresh: true));
-            var cards = new VocabularyService(path).QueryEntries(new() { SearchKeyword = "bank" });
+            var cards = new VocabularyService(path).QueryEntries(new());
             var updated = Assert.Single(cards, e => e.Id == card.Id);
             Assert.Equal("岸边", updated.Translation);
             Assert.Equal(fresh.Senses[0], updated.Senses[0]);

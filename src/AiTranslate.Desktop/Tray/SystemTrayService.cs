@@ -13,7 +13,7 @@ namespace AiTranslate.Desktop.Tray;
 /// System tray icon & NativeMenu service for AI Translate.
 /// Supports minimize-to-tray, one-click restore, screenshot translate, selection translate,
 /// clipboard translate, FSRS vocabulary review, and real-time monitoring toggles.
-/// All icons are rendered from official Pictogrammers MDI vector paths.
+/// All icons are rendered from Font Awesome Free vector paths.
 /// </summary>
 public sealed class SystemTrayService : IDisposable
 {
@@ -24,8 +24,8 @@ public sealed class SystemTrayService : IDisposable
     private readonly NativeMenuItem _selectionItem;
     private readonly NativeMenuItem _clipboardItem;
     private readonly NativeMenuItem _dueReviewItem;
-    private readonly Bitmap _reviewIcon = RenderMdiIconBitmap("cards", AppTheme.TextSecondary);
-    private readonly Bitmap _notebookIcon = RenderMdiIconBitmap("notebook-outline", AppTheme.TextSecondary);
+    private readonly Bitmap _reviewIcon = RenderIconBitmap("layer-group", AppTheme.TextSecondary);
+    private readonly Bitmap _notebookIcon = RenderIconBitmap("book", AppTheme.TextSecondary);
     private readonly NativeMenuItem _clipboardMonitorItem;
     private readonly NativeMenuItem _selectionMonitorItem;
     private bool _disposed;
@@ -46,13 +46,13 @@ public sealed class SystemTrayService : IDisposable
 
         var showMainItem = new NativeMenuItem("打开 AI Translate")
         {
-            Icon = RenderMdiIconBitmap("translate", AppTheme.AccentBright)
+            Icon = RenderIconBitmap("language", AppTheme.AccentBright)
         };
         showMainItem.Click += (_, _) => onShowMainWindow();
 
-        _screenshotItem = CreateActionItem("crop-free", onStartScreenshotTranslate);
-        _selectionItem = CreateActionItem("cursor-text", onTriggerSelectionTranslate);
-        _clipboardItem = CreateActionItem("clipboard-text-outline", onTranslateClipboardNow);
+        _screenshotItem =                 CreateActionItem("crop-simple", onStartScreenshotTranslate);
+                _selectionItem = CreateActionItem("i-cursor", onTriggerSelectionTranslate);
+                _clipboardItem = CreateActionItem("paste", onTranslateClipboardNow);
 
         _dueReviewItem = new NativeMenuItem();
         _dueReviewItem.Click += (_, _) => onOpenVocabularyReview();
@@ -81,13 +81,13 @@ public sealed class SystemTrayService : IDisposable
 
         var settingsItem = new NativeMenuItem("设置…")
         {
-            Icon = RenderMdiIconBitmap("cog-outline", AppTheme.TextSecondary)
+            Icon = RenderIconBitmap("gear", AppTheme.TextSecondary)
         };
         settingsItem.Click += (_, _) => onOpenSettings();
 
         var exitItem = new NativeMenuItem("退出")
         {
-            Icon = RenderMdiIconBitmap("power", AppTheme.TextSecondary)
+            Icon = RenderIconBitmap("power-off", AppTheme.TextSecondary)
         };
         exitItem.Click += (_, _) => onExitApplication();
 
@@ -162,18 +162,19 @@ public sealed class SystemTrayService : IDisposable
         SetHotkey(_selectionItem, "划词翻译", s.SelectionTranslateHotkey);
         SetHotkey(_clipboardItem, "剪贴板翻译", s.ClipboardTranslateHotkey);
 
-        var stats = _vocabularyService.GetDashboardStats();
-        var hasDue = stats.DueTodayCount > 0;
-        _dueReviewItem.Header = hasDue ? $"复习今日到期 · {stats.DueTodayCount} 词" : $"打开生词本 · {stats.TotalEntries} 词";
+        var summaries = _vocabularyService.GetNotebookSummaries();
+        var due = summaries.Sum(n => n.DueCount);
+        var hasDue = due > 0;
+        _dueReviewItem.Header = hasDue ? $"复习今日到期 · {due} 词" : $"打开生词本 · {summaries.Sum(n => n.EntryCount)} 词";
         _dueReviewItem.Icon = hasDue ? _reviewIcon : _notebookIcon;
         _trayIcon.ToolTipText = hasDue
-            ? $"AI Translate · 今日待复习 {stats.DueTodayCount} 词"
+            ? $"AI Translate · 今日待复习 {due} 词"
             : "AI Translate";
     }
 
     private static NativeMenuItem CreateActionItem(string iconName, Action onClick)
     {
-        var item = new NativeMenuItem { Icon = RenderMdiIconBitmap(iconName, AppTheme.TextSecondary) };
+        var item = new NativeMenuItem { Icon = RenderIconBitmap(iconName, AppTheme.TextSecondary) };
         item.Click += (_, _) => onClick();
         return item;
     }
@@ -206,10 +207,10 @@ public sealed class SystemTrayService : IDisposable
     // Rendered large at 96 DPI: the Fluent menu icon slot is a down-scaling Viewbox (16 DIP) and native
     // menus resize icons to the menu font, so this stays crisp on high-DPI displays. A DPI-scaled
     // RenderTargetBitmap would be cropped by Image, which treats its DIP size as the pixel source rect.
-    private static Bitmap RenderMdiIconBitmap(string iconName, IBrush brush)
+    private static Bitmap RenderIconBitmap(string iconName, IBrush brush)
     {
         const int size = 64;
-        var icon = new MdiIcon(iconName, size, brush) { Width = size, Height = size };
+        var icon = new FontAwesomeIcon(iconName, size, brush) { Width = size, Height = size };
         icon.Measure(new Size(size, size));
         icon.Arrange(new Rect(0, 0, size, size));
         var rtb = new RenderTargetBitmap(new PixelSize(size, size), new Vector(96, 96));

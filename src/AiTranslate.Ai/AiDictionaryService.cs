@@ -38,7 +38,8 @@ public interface IAiDictionaryService
 /// </summary>
 public sealed partial class AiDictionaryService(Func<IAiTransport?> transportFactory, IDictionaryEntryCache? cache = null,
     Func<string, string, IReadOnlyList<CollocationItem>>? lookupTerms = null,
-    Action<DictionaryEntryResult, long>? refreshCollectedEntries = null, Func<string?>? readerLanguageId = null) : IAiDictionaryService
+    Action<DictionaryEntryResult, long>? refreshCollectedEntries = null, Func<string?>? readerLanguageId = null,
+    IGrammarLibrary? grammarLibrary = null) : IAiDictionaryService
 {
     // The workbench and capture popup share this service. A second lookup waits for the first SQLite commit.
     private readonly ConcurrentDictionary<string, PendingLookup> _pending = new();
@@ -162,11 +163,24 @@ public sealed partial class AiDictionaryService(Func<IAiTransport?> transportFac
             }
             if (!forceRefresh && contextSentence.Length == 0 && BuiltInShowcaseLexicon.TryGet(trimmed, out var builtin) && builtin.TargetLanguage == targetLanguage.Id)
                 return await SaveResultAsync(builtin with { SourceText = trimmed, Origin = DictionaryResultOrigin.BuiltIn, GlossaryReferences = terms }).ConfigureAwait(false);
-            throw new AiException("请在「引擎与快捷键」中配置 AI 引擎，以查询这条内容。");
+            throw new AiException("请在「应用设置」中配置 AI 引擎，以查询这条内容。");
         }
 
         try
         {
+            var request = new JsonObject
+            {
+                ["source_text"] = trimmed,
+                ["reader_language"] = readerLanguage.Id,
+                ["context_sentence"] = contextSentence,
+                ["english_lookup_hints"] = intent == DictionaryLookupIntent.Quick ? null : JsonSerializer.SerializeToNode(EnglishLexicalHints.Find(trimmed)),
+                ["glossary"] = JsonSerializer.SerializeToNode(terms.Select(t => new { source = t.Phrase, translation = t.Meaning })),
+                ["target_language"] = targetLanguage.Id
+            };
+            // Naming grammar points after the local library keeps this sentence's grammar blocks linked to the grammar studio.
+            if (grammarLibrary is not null && intent == DictionaryLookupIntent.Learning && DictionaryQuery.SuggestType(trimmed).IsPassage() &&
+                await Task.Run(() => grammarLibrary.Titles(readerLanguage.Id, 40), cancellationToken).ConfigureAwait(false) is { Count: > 0 } known)
+                request["known_grammar_topics"] = JsonSerializer.SerializeToNode(known);
             var messages = new JsonObject[]
             {
                 new()
@@ -174,19 +188,7 @@ public sealed partial class AiDictionaryService(Func<IAiTransport?> transportFac
                     ["role"] = "system",
                     ["content"] = intent == DictionaryLookupIntent.Quick ? QuickGenerationPrompt(targetLanguage, readerLanguage) : CoreGenerationPrompt(targetLanguage, readerLanguage)
                 },
-                new()
-                {
-                    ["role"] = "user",
-                    ["content"] = new JsonObject
-                    {
-                        ["source_text"] = trimmed,
-                        ["reader_language"] = readerLanguage.Id,
-                        ["context_sentence"] = contextSentence,
-                        ["english_lookup_hints"] = intent == DictionaryLookupIntent.Quick ? null : JsonSerializer.SerializeToNode(EnglishLexicalHints.Find(trimmed)),
-                        ["glossary"] = JsonSerializer.SerializeToNode(terms.Select(t => new { source = t.Phrase, translation = t.Meaning })),
-                        ["target_language"] = targetLanguage.Id
-                    }.ToJsonString()
-                }
+                new() { ["role"] = "user", ["content"] = request.ToJsonString() }
             };
 
             var preview = new DictionaryFieldPreview(onStreamingPreview, onEntryPreview is null ? null : root =>
@@ -432,7 +434,7 @@ public sealed partial class AiDictionaryService(Func<IAiTransport?> transportFac
             if (start < 0 || DictionaryTextMatch.IndexOf(source, quote, start + 1, StringComparison.Ordinal) >= 0) continue;
             var end = start + quote.Length;
             if (anchors.Any(a => start < a.End && end > a.Start)) continue;
-            anchors.Add((start, end, new(quote, label, explanation)));
+            anchors.Add((start, end, new(quote, label, explanation, GetString(item, "topic").Trim())));
         }
         return anchors.OrderBy(a => a.Start).Select(a => a.Highlight).ToArray();
     }

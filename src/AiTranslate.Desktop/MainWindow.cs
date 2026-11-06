@@ -28,16 +28,19 @@ public sealed class MainWindow : Window
     private readonly ISpeechSynthesisService _speechService;
     private readonly ScreenshotTranslationCoordinator _screenshotCoordinator;
     private readonly SelectionPopupWindow _selectionPopup;
+    private readonly SelectionPromptWindow _selectionPrompt;
     private readonly SystemTrayService _trayService;
 
     private readonly DictionaryStudioView _dictionaryView;
+    private readonly GrammarStudioView _grammarView;
     private readonly VocabularyVaultView _vocabularyView;
-    private readonly FsrsReviewArenaView _reviewView;
     private readonly EngineSettingsView _settingsView;
 
+    private const int TabDictionary = 0, TabGrammar = 1, TabVocabulary = 2, TabSettings = 3;
+
     private readonly Button _navDictBtn;
+    private readonly Button _navGrammarBtn;
     private readonly Button _navVocabBtn;
-    private readonly Button _navReviewBtn;
     private readonly Button _navSettingsBtn;
     private readonly TextBlock _dueBadgeText;
     private readonly Border _dueBadgeBorder;
@@ -53,6 +56,7 @@ public sealed class MainWindow : Window
         IDesktopPlatformService platform,
         AppSettingsStore settingsStore,
         IAiDictionaryService dictionaryService,
+        IAiGrammarService grammarService,
         IVocabularyService vocabularyService,
         ISpeechSynthesisService speechService)
     {
@@ -65,7 +69,7 @@ public sealed class MainWindow : Window
         Icon = AppIcons.CreateWindowIcon();
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         ShowActivated = true;
-        FitToWorkingArea(new Size(1040, 840));
+        FitToWorkingArea(new Size(1280, 900));
         Background = AppTheme.WindowBg;
         FontFamily = AppTheme.BodyFont;
 
@@ -86,7 +90,7 @@ public sealed class MainWindow : Window
                 Dispatcher.UIThread.Post(() =>
                 {
                     ShowAndActivate();
-                    SwitchTab(0);
+                    SwitchTab(TabDictionary);
                     _ = _dictionaryView!.LookupAsync(text, null, TranslationTriggerSource.ScreenshotOcr, sourceTitle ?? "截图翻译");
                 });
             },
@@ -119,7 +123,7 @@ public sealed class MainWindow : Window
                 Dispatcher.UIThread.Post(() =>
                 {
                     ShowAndActivate();
-                    SwitchTab(0);
+                    SwitchTab(TabDictionary);
                     if (translation is null)
                         _ = _dictionaryView!.OpenDetailsAsync(result, captured.Source, captured.SourceWindowTitle);
                     else
@@ -129,8 +133,10 @@ public sealed class MainWindow : Window
                     }
                 });
             }, _platform);
-
-        // Instantiate modular Views
+        var selectionPrompt = new SelectionPromptWindow(_platform);
+        _selectionPrompt = selectionPrompt;
+        var selectionRouter = new SelectionLookupRouter(dictionaryService, _settingsStore, _selectionPopup, selectionPrompt);
+        DictionaryReadingText.SelectionRouter = (query, anchor, open) => _ = selectionRouter.RouteAsync(query, anchor, open);
         _dictionaryView = new DictionaryStudioView(
             dictionaryService,
             _vocabularyService,
@@ -138,24 +144,36 @@ public sealed class MainWindow : Window
             _settingsStore,
             SetStatus);
 
+        _grammarView = new GrammarStudioView(
+            grammarService,
+            _speechService,
+            _settingsStore,
+            SetStatus,
+            lookupInDictionary: (text, context) =>
+            {
+                SwitchTab(TabDictionary);
+                _ = _dictionaryView.LookupAsync(text, string.IsNullOrWhiteSpace(context) ? null : context, TranslationTriggerSource.ManualInput, "语法精解");
+            });
+        // Grammar blocks of a translation, the notebook and the capture popup all open the same studio.
+        GrammarLinks.Open = (topic, language) => Dispatcher.UIThread.Post(() =>
+        {
+            ShowAndActivate();
+            SwitchTab(TabGrammar);
+            _ = _grammarView.OpenTopicAsync(topic, language);
+        });
+        GrammarLinks.IsKnown = (topic, language) => grammarService.IsKnown(topic, language);
+
         _vocabularyView = new VocabularyVaultView(
             _vocabularyService,
             _speechService,
             _settingsStore,
             onLookupInStudio: (word, ctx, src, title, target) =>
             {
-                SwitchTab(0);
+                SwitchTab(TabDictionary);
                 _ = _dictionaryView.LookupAsync(word, ctx, src, title, target);
             },
-            onCollect: notebookId =>
-            {
-                _dictionaryView.RefreshNotebooks(notebookId);
-                SwitchTab(0);
-            },
-            onSwitchToReview: notebookId => SwitchTab(2, notebookId),
             SetStatus, dictionaryService);
 
-        _reviewView = new FsrsReviewArenaView(_vocabularyService, _speechService, _settingsStore, SetStatus);
         _settingsView = new EngineSettingsView(_settingsStore, _speechService, SetStatus);
         _speechService.StatusChanged += (_, s) => Dispatcher.UIThread.Post(() => SetStatus(s));
 
@@ -164,17 +182,24 @@ public sealed class MainWindow : Window
             _settingsStore,
             _vocabularyService,
             onShowMainWindow: () => Dispatcher.UIThread.Post(ShowAndActivate),
-            onOpenVocabularyReview: () => Dispatcher.UIThread.Post(() => { ShowAndActivate(); SwitchTab(2); }),
+            onOpenVocabularyReview: () => Dispatcher.UIThread.Post(() =>
+            {
+                ShowAndActivate();
+                SwitchTab(TabVocabulary);
+                if (_vocabularyService.GetNotebookSummaries().Any(n => n.DueCount > 0)) _vocabularyView.StartReview();
+            }),
             onStartScreenshotTranslate: () => _ = _screenshotCoordinator.StartCaptureAndTranslateAsync(),
             onTriggerSelectionTranslate: () => _ = TriggerSelectionHotkeyAsync(),
             onTranslateClipboardNow: () => _ = TranslateClipboardNowAsync(),
-            onOpenSettings: () => Dispatcher.UIThread.Post(() => { ShowAndActivate(); SwitchTab(3); }),
+            onOpenSettings: () => Dispatcher.UIThread.Post(() => { ShowAndActivate(); SwitchTab(TabSettings); }),
             onExitApplication: ExitApplication);
 
-        _navDictBtn = CreateNavButton("translate", "查词与翻译", 0);
-        _navVocabBtn = CreateNavButton("book-open-page-variant", "生词本", 1);
-        _navReviewBtn = CreateNavButton("brain", "生词复习", 2);
-        _navSettingsBtn = CreateNavButton("cog-outline", "引擎与快捷键", 3);
+        _navDictBtn = CreateNavButton("language", "查词翻译", TabDictionary);
+        _navGrammarBtn = CreateNavButton("graduation-cap", "语法精解", TabGrammar);
+        ToolTip.SetTip(_navGrammarBtn, "讲解语法点，或分析句子里的语法");
+        _navVocabBtn = CreateNavButton("book-bookmark", "生词本", TabVocabulary);
+        _navSettingsBtn = CreateNavButton("gear", "应用设置", TabSettings);
+        ToolTip.SetTip(_navSettingsBtn, "设置 AI 引擎、语音和快捷键");
 
         _dueBadgeText = new TextBlock { Text = "0", FontSize = 11, FontWeight = FontWeight.Bold, Foreground = Brushes.White };
         _dueBadgeBorder = new Border
@@ -191,12 +216,13 @@ public sealed class MainWindow : Window
 
         _clipboardMonitorToggle = new ToggleSwitch
         {
-            OffContent = "监听剪贴板自动快译",
-            OnContent = "监听剪贴板自动快译",
+            OffContent = "复制即译",
+            OnContent = "复制即译",
             IsChecked = _settingsStore.Current.EnableClipboardMonitor,
             Foreground = AppTheme.TextSecondary,
-            FontSize = 12
+            FontSize = AppTheme.Type.Small
         };
+        ToolTip.SetTip(_clipboardMonitorToggle, "开启后，复制文字即可自动弹出译文");
         _clipboardMonitorToggle.IsCheckedChanged += (_, _) =>
         {
             if (_syncingToggles) return;
@@ -206,12 +232,13 @@ public sealed class MainWindow : Window
 
         _selectionMonitorToggle = new ToggleSwitch
         {
-            OffContent = "全局鼠标划词即译",
-            OnContent = "全局鼠标划词即译",
+            OffContent = "划词即译",
+            OnContent = "划词即译",
             IsChecked = _settingsStore.Current.EnableMouseSelectionTranslate,
             Foreground = AppTheme.TextSecondary,
-            FontSize = 12
+            FontSize = AppTheme.Type.Small
         };
+        ToolTip.SetTip(_selectionMonitorToggle, "开启后，用鼠标选中文字即可自动弹出译文");
         _selectionMonitorToggle.IsCheckedChanged += (_, _) =>
         {
             if (_syncingToggles) return;
@@ -234,8 +261,8 @@ public sealed class MainWindow : Window
                     Children =
                     {
                         _dictionaryView,
+                        _grammarView,
                         _vocabularyView,
-                        _reviewView,
                         _settingsView
                     }
                 },
@@ -294,7 +321,7 @@ public sealed class MainWindow : Window
 
         RegisterGlobalHotkeys();
         OnVocabularyChanged();
-        SwitchTab(0);
+        SwitchTab(TabDictionary);
         Opened += (_, _) => _dictionaryView.FocusInput();
     }
 
@@ -338,6 +365,11 @@ public sealed class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _dictionaryView.StopLookup();
+        _grammarView.StopRequest();
+        GrammarLinks.Open = null;
+        GrammarLinks.IsKnown = null;
+        DictionaryReadingText.SelectionRouter = null;
+        _selectionPrompt.Close();
         _selectionPopup.Close();
         _screenshotCoordinator.Dispose();
         _trayService.Dispose();
@@ -386,20 +418,14 @@ public sealed class MainWindow : Window
             Children =
             {
                 _navDictBtn,
-                _navVocabBtn,
-                new Grid { Children = { _navReviewBtn, _dueBadgeBorder } },
+                _navGrammarBtn,
+                new Grid { Children = { _navVocabBtn, _dueBadgeBorder } },
                 _navSettingsBtn
             }
         };
 
-        var captureHeader = new TextBlock
-        {
-            Text = "快捷捕获",
-            FontSize = AppTheme.Type.Caption,
-            FontWeight = FontWeight.SemiBold,
-            Foreground = AppTheme.TextMuted,
-            Margin = new Thickness(18, 20, 18, 8)
-        };
+        var captureHeader = TextStyles.Create("快捷翻译", TextRole.Label, wrap: false);
+        captureHeader.Margin = new Thickness(AppTheme.Space.XXL, AppTheme.Space.XL, AppTheme.Space.XXL, AppTheme.Space.S);
 
         var captureStack = new StackPanel
         {
@@ -407,9 +433,9 @@ public sealed class MainWindow : Window
             Margin = new Thickness(12, 0),
             Children =
             {
-                CreateQuickCaptureBtn("crop-free", "截图翻译", AppTheme.Hues.Sky, _settingsStore.Current.ScreenshotTranslateHotkey.ToString(), () => _ = _screenshotCoordinator.StartCaptureAndTranslateAsync()),
-                CreateQuickCaptureBtn("cursor-text", "划词翻译", AppTheme.Hues.Jade, _settingsStore.Current.SelectionTranslateHotkey.ToString(), () => _ = TriggerSelectionHotkeyAsync()),
-                CreateQuickCaptureBtn("clipboard-text-outline", "剪贴板翻译", AppTheme.Hues.Violet, _settingsStore.Current.ClipboardTranslateHotkey.ToString(), () => _ = TranslateClipboardNowAsync())
+                CreateQuickCaptureBtn("crop-simple", "截图翻译", "截取屏幕区域并翻译其中的文字", AppTheme.Hues.Sky, _settingsStore.Current.ScreenshotTranslateHotkey.ToString(), () => _ = _screenshotCoordinator.StartCaptureAndTranslateAsync()),
+                CreateQuickCaptureBtn("i-cursor", "划词翻译", "翻译当前选中的文本", AppTheme.Hues.Jade, _settingsStore.Current.SelectionTranslateHotkey.ToString(), () => _ = TriggerSelectionHotkeyAsync()),
+                CreateQuickCaptureBtn("paste", "粘贴翻译", "翻译剪贴板中的文本", AppTheme.Hues.Violet, _settingsStore.Current.ClipboardTranslateHotkey.ToString(), () => _ = TranslateClipboardNowAsync())
             }
         };
 
@@ -419,14 +445,14 @@ public sealed class MainWindow : Window
             BorderBrush = AppTheme.BorderSubtle,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(AppTheme.Radius.L),
-            Padding = new Thickness(14, 12),
+            Padding = new Thickness(AppTheme.Space.M),
             Margin = new Thickness(12, 12, 12, 14),
             Child = new StackPanel
             {
                 Spacing = 6,
                 Children =
                 {
-                    new TextBlock { Text = "自动捕获", FontSize = AppTheme.Type.Caption, FontWeight = FontWeight.SemiBold, Foreground = AppTheme.TextSecondary },
+                    TextStyles.Create("自动翻译", TextRole.Label, wrap: false),
                     _clipboardMonitorToggle,
                     _selectionMonitorToggle
                 }
@@ -452,41 +478,41 @@ public sealed class MainWindow : Window
 
     private void OnVocabularyChanged()
     {
-        var stats = _vocabularyService.GetDashboardStats();
-        _dueBadgeText.Text = stats.DueTodayCount.ToString();
-        _dueBadgeBorder.IsVisible = stats.DueTodayCount > 0;
+        var due = _vocabularyService.GetNotebookSummaries().Sum(s => s.DueCount);
+        _dueBadgeText.Text = due.ToString();
+        _dueBadgeBorder.IsVisible = due > 0;
         _dictionaryView.RefreshNotebooks();
         _selectionPopup.RefreshBookmark();
         _vocabularyView.RefreshAll();
     }
 
-    public void SwitchTab(int index, string? reviewNotebookId = null)
+    public void SwitchTab(int index)
     {
         _pageTools.Content = index switch
         {
-            0 => new TextBlock
-            {
-                Text = "查词与翻译", FontSize = AppTheme.Type.Title,
-                FontWeight = FontWeight.SemiBold, Foreground = AppTheme.TextPrimary
-            },
-            1 => _vocabularyView.Toolbar,
-            2 => _reviewView.Toolbar,
-            3 => _settingsView.Toolbar,
+            TabDictionary => TextStyles.Create("查词翻译", TextRole.PageTitle),
+            TabGrammar => TextStyles.Create("语法精解", TextRole.PageTitle),
+            TabVocabulary => _vocabularyView.Toolbar,
+            TabSettings => _settingsView.Toolbar,
             _ => null
         };
-        _dictionaryView.IsVisible = index == 0;
-        _vocabularyView.IsVisible = index == 1;
-        _reviewView.IsVisible = index == 2;
-        _settingsView.IsVisible = index == 3;
+        _dictionaryView.IsVisible = index == TabDictionary;
+        _grammarView.IsVisible = index == TabGrammar;
+        _vocabularyView.IsVisible = index == TabVocabulary;
+        _settingsView.IsVisible = index == TabSettings;
 
-        UpdateNavHighlight(_navDictBtn, index == 0);
-        UpdateNavHighlight(_navVocabBtn, index == 1);
-        UpdateNavHighlight(_navReviewBtn, index == 2);
-        UpdateNavHighlight(_navSettingsBtn, index == 3);
+        UpdateNavHighlight(_navDictBtn, index == TabDictionary);
+        UpdateNavHighlight(_navGrammarBtn, index == TabGrammar);
+        UpdateNavHighlight(_navVocabBtn, index == TabVocabulary);
+        UpdateNavHighlight(_navSettingsBtn, index == TabSettings);
 
-        if (index == 0 && IsVisible) _dictionaryView.FocusInput();
-        if (index == 1) _vocabularyView.RefreshAll();
-        if (index == 2) _reviewView.RefreshDecksAndStart(reviewNotebookId);
+        if (index == TabDictionary && IsVisible) _dictionaryView.FocusInput();
+        if (index == TabGrammar)
+        {
+            _grammarView.RefreshLibrary();
+            if (IsVisible) _grammarView.FocusInput();
+        }
+        if (index == TabVocabulary) _vocabularyView.RefreshAll();
     }
 
     private void RegisterGlobalHotkeys()
@@ -526,7 +552,7 @@ public sealed class MainWindow : Window
             return;
         }
         ShowAndActivate();
-        SwitchTab(0);
+        SwitchTab(TabDictionary);
         await _dictionaryView.LookupAsync(text, null, TranslationTriggerSource.ClipboardMonitor, "剪贴板读取");
     }
 
@@ -549,18 +575,18 @@ public sealed class MainWindow : Window
             Classes = { "nav" },
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Left,
-            Padding = new Thickness(14, 11),
+            Padding = new Thickness(AppTheme.Space.M),
             CornerRadius = new CornerRadius(AppTheme.Radius.M),
             BorderThickness = new Thickness(0),
             Background = Brushes.Transparent,
             Content = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 12,
+                Spacing = AppTheme.Space.M,
                 Children =
                 {
-                    new MdiIcon(icon, 19, AppTheme.TextSecondary),
-                    new TextBlock { Text = title, FontSize = 13.5, FontWeight = FontWeight.Medium, Foreground = AppTheme.TextPrimary, VerticalAlignment = VerticalAlignment.Center }
+                    new FontAwesomeIcon(icon, 20, AppTheme.TextSecondary) { Width = AppTheme.Space.XXL },
+                    TextStyles.Apply(new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center }, TextRole.Body)
                 }
             }
         };
@@ -572,7 +598,7 @@ public sealed class MainWindow : Window
     {
         btn.Background = active ? AppTheme.AccentSoft : Brushes.Transparent;
         btn.Classes.Set("active", active);
-        if (btn.Content is StackPanel sp && sp.Children[0] is MdiIcon icon && sp.Children[1] is TextBlock tb)
+        if (btn.Content is StackPanel sp && sp.Children[0] is FontAwesomeIcon icon && sp.Children[1] is TextBlock tb)
         {
             icon.Foreground = active ? AppTheme.AccentBright : AppTheme.TextSecondary;
             tb.Foreground = active ? AppTheme.AccentBright : AppTheme.TextPrimary;
@@ -580,7 +606,7 @@ public sealed class MainWindow : Window
         }
     }
 
-    private static Button CreateQuickCaptureBtn(string icon, string label, Hue hue, string shortcut, Action onClick)
+    private static Button CreateQuickCaptureBtn(string icon, string label, string description, Hue hue, string shortcut, Action onClick)
     {
         var keycap = StudioUi.CreateKeycap(shortcut);
         Grid.SetColumn(keycap, 2);
@@ -592,23 +618,24 @@ public sealed class MainWindow : Window
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
             CornerRadius = new CornerRadius(AppTheme.Radius.S),
-            Padding = new Thickness(10, 6),
+            Padding = new Thickness(AppTheme.Space.M, AppTheme.Space.XS),
             Content = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
-                ColumnSpacing = 10,
+                ColumnSpacing = AppTheme.Space.M,
                 Children =
                 {
                     new Border
                     {
                         Width = 24, Height = 24, CornerRadius = new CornerRadius(7), Background = hue.Soft,
-                        Child = new MdiIcon(icon, 14, hue.Ink)
+                        Child = new FontAwesomeIcon(icon, 14, hue.Ink)
                     },
-                    new TextBlock { [Grid.ColumnProperty] = 1, Text = label, FontSize = 12.5, FontWeight = FontWeight.Medium, Foreground = AppTheme.TextPrimary, VerticalAlignment = VerticalAlignment.Center },
+                    TextStyles.Apply(new TextBlock { [Grid.ColumnProperty] = 1, Text = label, VerticalAlignment = VerticalAlignment.Center }, TextRole.FieldLabel),
                     keycap
                 }
             }
         };
+        ToolTip.SetTip(btn, description);
         btn.Click += (_, _) => onClick();
         return btn;
     }

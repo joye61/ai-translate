@@ -53,19 +53,19 @@ public static class StudioUi
         Child = child
     };
 
-    public static StackPanel CreateSectionHeader(string mdiIcon, string title, string? subtitle, IBrush accentBrush) =>
-        CreateSectionHeader(mdiIcon, title, subtitle, accentBrush, out _);
+    public static StackPanel CreateSectionHeader(string icon, string title, string? subtitle, IBrush accentBrush) =>
+        CreateSectionHeader(icon, title, subtitle, accentBrush, out _);
 
     /// <summary>Section title row whose icon tile is tinted with a category <paramref name="hue"/>.</summary>
-    public static StackPanel CreateSectionHeader(string mdiIcon, string title, string? subtitle, Hue hue)
+    public static StackPanel CreateSectionHeader(string icon, string title, string? subtitle, Hue hue)
     {
-        var header = CreateSectionHeader(mdiIcon, title, subtitle, hue.Ink, out _);
+        var header = CreateSectionHeader(icon, title, subtitle, hue.Ink, out _);
         ((Border)header.Children[0]).Background = hue.Soft;
         return header;
     }
 
     /// <summary>Section title row; <paramref name="subtitleText"/> lets callers update a live count or hint in place.</summary>
-    public static StackPanel CreateSectionHeader(string mdiIcon, string title, string? subtitle, IBrush accentBrush,
+    public static StackPanel CreateSectionHeader(string icon, string title, string? subtitle, IBrush accentBrush,
         out TextBlock subtitleText)
     {
         subtitleText = new TextBlock
@@ -89,7 +89,7 @@ public static class StudioUi
                     Height = 28,
                     CornerRadius = new CornerRadius(AppTheme.Radius.S),
                     Background = ReferenceEquals(accentBrush, AppTheme.Insight) ? AppTheme.InsightSoft : AppTheme.InputBg,
-                    Child = new MdiIcon(mdiIcon, 16, accentBrush)
+                    Child = new FontAwesomeIcon(icon, 16, accentBrush)
                 },
                 new TextBlock
                 {
@@ -105,7 +105,7 @@ public static class StudioUi
     }
 
     /// <summary>Square ghost button for toolbars; same 34px height as <see cref="CreateSecondaryButton(string,string,Action)"/>.</summary>
-    public static Button CreateIconButton(string mdiIcon, string tooltip, Action onClick)
+    public static Button CreateIconButton(string icon, string tooltip, Action onClick)
     {
         var btn = new Button
         {
@@ -119,7 +119,7 @@ public static class StudioUi
             CornerRadius = new CornerRadius(AppTheme.Radius.M),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Content = new MdiIcon(mdiIcon, 17, AppTheme.TextSecondary)
+            Content = new FontAwesomeIcon(icon, 17, AppTheme.TextSecondary)
         };
         AutomationProperties.SetName(btn, tooltip);
         ToolTip.SetTip(btn, tooltip);
@@ -128,7 +128,7 @@ public static class StudioUi
     }
 
     /// <summary>Borderless, low-emphasis inline action (e.g. inside example tiles). Background appears on hover only.</summary>
-    public static Button CreateCompactButton(string mdiIcon, string text, Action onClick)
+    public static Button CreateCompactButton(string icon, string text, Action onClick)
     {
         var btn = new Button
         {
@@ -144,7 +144,7 @@ public static class StudioUi
                 Spacing = AppTheme.Space.XS,
                 Children =
                 {
-                    new MdiIcon(mdiIcon, 14),
+                    new FontAwesomeIcon(icon, 14),
                     new TextBlock
                     {
                         Text = text,
@@ -175,8 +175,8 @@ public static class StudioUi
     }
 
     /// <summary>Non-interactive category pill tinted with <paramref name="hue"/> (item type, origin).</summary>
-    public static Border CreateChip(string text, Hue hue, string? mdiIcon = null) =>
-        CreateChip(text, mdiIcon, hue.Ink, hue.Soft);
+    public static Border CreateChip(string text, Hue hue, string? icon = null) =>
+        CreateChip(text, icon, hue.Ink, hue.Soft);
 
     /// <summary>Colored status dot followed by a quiet label, e.g. ● 学习中.</summary>
     public static StackPanel CreateDotLabel(string text, Hue hue) => new()
@@ -194,11 +194,11 @@ public static class StudioUi
     };
 
     /// <summary>Neutral, non-interactive pill for metadata (item type, part of speech, origin).</summary>
-    public static Border CreateChip(string text, string? mdiIcon = null, IBrush? foreground = null, IBrush? background = null)
+    public static Border CreateChip(string text, string? icon = null, IBrush? foreground = null, IBrush? background = null)
     {
         var fg = foreground ?? AppTheme.TextSecondary;
         var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = AppTheme.Space.XXS };
-        if (mdiIcon is not null) content.Children.Add(new MdiIcon(mdiIcon, 13, fg));
+        if (icon is not null) content.Children.Add(new FontAwesomeIcon(icon, 13, fg));
         content.Children.Add(new TextBlock
         {
             Text = text, FontSize = AppTheme.Type.Caption, FontWeight = FontWeight.Medium, Foreground = fg,
@@ -230,7 +230,7 @@ public static class StudioUi
         }
     };
 
-    public static Button CreatePrimaryButton(string mdiIcon, string text, Action onClick)
+    public static Button CreatePrimaryButton(string icon, string text, Action onClick)
     {
         var btn = new Button
         {
@@ -246,7 +246,7 @@ public static class StudioUi
                 Spacing = 8,
                 Children =
                 {
-                    new MdiIcon(mdiIcon, 16, Brushes.White),
+                    new FontAwesomeIcon(icon, 16, Brushes.White),
                     new TextBlock
                     {
                         Text = text,
@@ -262,11 +262,48 @@ public static class StudioUi
         return btn;
     }
 
-    public static Button CreateSecondaryButton(string mdiIcon, string text, Action onClick) =>
-        CreateSecondaryButton(new MdiIcon(mdiIcon, 15, AppTheme.TextSecondary),
+    public static Button CreateSecondaryButton(string icon, string text, Action onClick) =>
+        CreateSecondaryButton(new FontAwesomeIcon(icon, 15, AppTheme.TextSecondary),
             new TextBlock { Text = text }, onClick);
 
-    internal static Button CreateSecondaryButton(MdiIcon icon, TextBlock label, Action onClick)
+    /// <summary>Filled red button for the one action that destroys data, shaped like <see cref="CreatePrimaryButton"/>.</summary>
+    public static Button CreateDangerButton(string icon, string text, Action onClick)
+    {
+        var btn = CreatePrimaryButton(icon, text, onClick);
+        btn.Classes.Remove("primary");
+        btn.Classes.Add("danger");
+        btn.Background = AppTheme.Danger;
+        AutomationProperties.SetName(btn, text);
+        return btn;
+    }
+
+    /// <summary>Centered empty or finished state: a tinted round icon tile, a title and one line of guidance.</summary>
+    public static StackPanel CreateEmptyState(string icon, Hue hue, string title, string description, double maxWidth = 340)
+    {
+        var heading = TextStyles.Create(title, TextRole.SectionTitle);
+        heading.HorizontalAlignment = HorizontalAlignment.Center;
+        heading.TextAlignment = TextAlignment.Center;
+        var detail = TextStyles.Create(description, TextRole.Secondary);
+        detail.HorizontalAlignment = HorizontalAlignment.Center;
+        detail.TextAlignment = TextAlignment.Center;
+        detail.MaxWidth = maxWidth;
+        return new StackPanel
+        {
+            Spacing = AppTheme.Space.S, HorizontalAlignment = HorizontalAlignment.Center,
+            Children =
+            {
+                new Border
+                {
+                    Width = 64, Height = 64, CornerRadius = new CornerRadius(AppTheme.Radius.Pill), Background = hue.Soft,
+                    HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, AppTheme.Space.XS),
+                    Child = new FontAwesomeIcon(icon, 28, hue.Ink)
+                },
+                heading, detail
+            }
+        };
+    }
+
+    internal static Button CreateSecondaryButton(FontAwesomeIcon icon, TextBlock label, Action onClick)
     {
         label.FontSize = AppTheme.Type.Small;
         label.FontWeight = FontWeight.Medium;
@@ -293,19 +330,19 @@ public static class StudioUi
         return btn;
     }
 
-    public static Border CreateInfoTile(string title, string content, string? mdiIcon = null, IBrush? iconBrush = null) =>
-        CreateInfoTile(title, RichText.Create(content, TextRole.Body), mdiIcon, iconBrush);
+    public static Border CreateInfoTile(string title, string content, string? icon = null, IBrush? iconBrush = null) =>
+        CreateInfoTile(title, RichText.Create(content, TextRole.Body), icon, iconBrush);
 
     /// <summary>Grouped block on the inset surface. The title is always a neutral label; only the icon carries semantic color.</summary>
-    public static Border CreateInfoTile(string title, Control content, string? mdiIcon = null, IBrush? iconBrush = null)
+    public static Border CreateInfoTile(string title, Control content, string? icon = null, IBrush? iconBrush = null)
     {
         var header = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = AppTheme.Space.XS
         };
-        if (!string.IsNullOrWhiteSpace(mdiIcon))
-            header.Children.Add(new MdiIcon(mdiIcon, 14, iconBrush ?? AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Center });
+        if (!string.IsNullOrWhiteSpace(icon))
+            header.Children.Add(new FontAwesomeIcon(icon, 14, iconBrush ?? AppTheme.TextMuted) { VerticalAlignment = VerticalAlignment.Center });
         header.Children.Add(TextStyles.Create(title, TextRole.Label, wrap: false));
 
         return new Border
@@ -386,7 +423,7 @@ public static class StudioUi
         }
     };
 
-    public static Border CreateMetricKpiCard(string label, string value, string subtext, string mdiIcon, IBrush accentBrush) => new()
+    public static Border CreateMetricKpiCard(string label, string value, string subtext, string icon, IBrush accentBrush) => new()
     {
         Background = AppTheme.CardBg,
         BorderBrush = AppTheme.BorderSubtle,
@@ -409,7 +446,7 @@ public static class StudioUi
                     Background = AppTheme.InputBg,
                     BorderBrush = AppTheme.BorderSubtle,
                     BorderThickness = new Thickness(1),
-                    Child = new MdiIcon(mdiIcon, 20, accentBrush)
+                    Child = new FontAwesomeIcon(icon, 20, accentBrush)
                 },
                 new StackPanel
                 {

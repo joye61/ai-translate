@@ -10,7 +10,8 @@
   - **XCapture 截图原位翻译 (`Alt + S`)**：离线 RapidOCR 识别 + 表格/段落分析 + 原位背景擦除排版重绘。
   - **剪贴板监听 (`Alt + W`)**：支持后台实时监听或快捷键即刻精翻。
 - **神经语音引擎**在软件启动时后台预加载离线模型。支持英美多声线、IPA 音标朗读、自然拼读、慢速跟读和生词卡片连读。
-- **FSRS 生词本**支持直接阅读词条、释义和收录时的语境，按熟悉程度评分后安排下次复习，也可导出为 Anki TSV、Markdown、CSV、JSON。
+- **语法精解**面向学生：输入语法点（任何说法都行，如“过去进行时”“was/were 加 ing 怎么用”），或粘贴一个句子，AI 自己判断要讲什么——前者给出完整讲解（核心概念、构成公式、逐条用法与例句、标志词、变化规则、易混对比、特殊情况、常见错误、考点技巧、口诀、可自测的小练习、相关语法），后者找出句中的语法点逐项解析，并可一键深入精解。讲过的语法存入本地语法库，不同问法落到同一个规范名称，再次询问直接命中、不消耗 AI。翻译结果的「关键语法」会和语法库双向关联，点「精解」即可进入。
+- **生词本**把主动收藏的单词、句子和段落按分组管理。每个分组一个列表，可排序、导出（Anki TSV、Markdown、CSV、JSON）。列表只显示词条与释义，点开后与查词结果一致。「复习」按分组逐张出题：先看词，选「认识 / 模糊 / 不认识」，再看释义，不认识的词稍后会再出现。评分由 FSRS 安排下次复习时间。
 
 ## 项目结构
 
@@ -20,7 +21,7 @@ src/
   AiTranslate.Ai/                # AI 流式传输、区域翻译复核与认知词典服务
   AiTranslate.Ocr/               # 本地离线 RapidOCR (ONNX Runtime + SkiaSharp)
   AiTranslate.Speech/            # KokoroSharp 神经网络 TTS 与自然拼读拆解引擎
-  AiTranslate.Vocabulary/        # 生词本持久化、多维检索与多格式导入导出
+  AiTranslate.Vocabulary/        # 生词本分组与词条持久化、复习调度记录与多格式导出
   AiTranslate.Platform.Windows/  # Windows 截图、全局热键、剪贴板与划词捕获
   AiTranslate.Platform.MacOS/    # macOS 屏幕捕获、pbpaste 监听与 AppleScript 划词
   AiTranslate.Platform.Linux/    # Linux (X11/Wayland) 截图与 Primary Selection 划词
@@ -67,7 +68,7 @@ install -m 644 share/applications/ai-translate.desktop "$data_home/applications/
 cp -R share/icons/hicolor "$data_home/icons/"
 ```
 
-品牌母版和分平台资源位于 [Assets/Brand](src/AiTranslate.Desktop/Assets/Brand)。修改 SVG 后，可用安装了 `resvg-py` 和 `Pillow` 的 Python 运行 `python tools/generate-icons.py`，重建 ICO、ICNS、PNG 和 symbolic SVG。
+品牌母版和分平台资源位于 [Assets/Brand](src/AiTranslate.Desktop/Assets/Brand)。修改 SVG 后，可用安装了 `resvg-py` 和 `Pillow` 的 Python 运行 `python tools/generate-icons.py`，重建 ICO、ICNS、PNG 和 symbolic SVG。界面内的功能图标只用 [Font Awesome Free](https://fontawesome.com/icons)（许可证见 `LICENSE-FONTAWESOME.txt`），增删图标见 `tools/generate-fontawesome-icons.mjs`。
 
 ## 缓存、术语参考与离线模型
 
@@ -90,6 +91,8 @@ cp -R share/icons/hicolor "$data_home/icons/"
 截图每次都将本地 OCR 识别的文字发给所选 AI 引擎翻译。截图和译文仅用于本次操作，点击「保存译文图片」或「加入生词本」可以主动留存。升级时会清理旧版自动保存的截图翻译缓存。
 
 生词本独立保存在同目录的 `vocabulary-store.sqlite3`。词本、卡片和复习日志分别存储，每次评分在同一个事务中更新卡片并追加日志。升级前请退出旧版应用。首次启动新版时会读取旧 `vocabulary-store.json` 并迁移，原文件保留作备份。备份新版数据时请先退出应用，再复制两个 SQLite 文件。
+
+语法精解的讲解保存在同目录的 `grammar-library.sqlite3`，每个语法点只存一份，以规范名称为键，另有别名表记录学生用过的各种说法。提问时先在本地按名称和别名精确查找，命中即返回，不调用 AI；未命中时用一次很小的识别请求把问题归一成规范名称（并把本地库里已有的名称一并提供，让 AI 沿用），归一后再查一次库，仍未命中才撰写讲解。讲解分「核心」和「进阶」两次生成，进阶部分失败时核心讲解仍会保存，之后可点「补全进阶内容」。句子分析不入库，只把句中语法点按库内名称标出，点开某个语法点才讲解或从库里读取。翻译结果的「关键语法」同样沿用库内名称，并标出「已收录」。库的内容可用讲解页的「重新用 AI 讲解」刷新。
 
 词典中的「重新用 AI 翻译」成功后更新对应记录，失败或取消会保留之前的成功结果。「补全例句」和「补查常用义与短语」会把新增内容写回对应词条。截图工具栏的「重新识别并翻译」会重新执行 OCR 并请求 AI。
 

@@ -5,6 +5,16 @@ namespace AiTranslate.Ai;
 
 public sealed partial class AiDictionaryService
 {
+    private const string WordFamilyGuide = """
+        wordFamily 每项为 {label,value,partOfSpeech,relation,usage,expression,example}，前六项必填。
+        value 是源语相关词；英语只接受单个单词（可含连字符），含空格的复合词或短语归 collocations，不在本栏追加。
+        label 用 reader_language 写简短释义，partOfSpeech 是该相关词的词性，usage 说明选择条件或意义差别。
+        relation 仅用 derived（直接派生）、counterpart（功能对应，如 good/well）、sameForm（与查询词拼写相同但词性不同）、confusable（近形易混，如 hard/hardly）。
+        不把屈折形式、近义词、同一词源或主题相关当作直接派生；不要机械加 -ly。名词作定语不自动构成另一形容词用法。
+        expression 是逐字包含 value 的实际短表达；可选 example 是包含该词形的完整双语例句（sourceSentence、translatedSentence）。
+        同形另一词性已由义项解释即可省略；没有可靠的关联词时留空，不为填满栏目增加内容。
+        """;
+
     private static IReadOnlyList<SenseUsageCase> ReadUsageCases(JsonElement sense)
     {
         if (!sense.TryGetProperty("usageCases", out var items) || items.ValueKind != JsonValueKind.Array) return [];

@@ -41,7 +41,8 @@ public sealed class LocalStorageTests : IDisposable
         File.WriteAllText(Legacy, original);
         var service = new VocabularyService(Legacy);
         var reopened = new VocabularyService(Database);
-        Assert.Equal(Math.Round(100 * card.EstimateRetrievability(due), 1), reopened.GetDashboardStats(due).AverageRetentionRate);
+        var summary = Assert.Single(reopened.GetNotebookSummaries(due));
+        Assert.Equal((1, 1), (summary.EntryCount, summary.DueCount));
         Assert.Equal(JsonSerializer.Serialize(card), JsonSerializer.Serialize(reopened.FindByHeadword("BANK")));
         using (var db = Open(Database))
         using (var cmd = db.CreateCommand())

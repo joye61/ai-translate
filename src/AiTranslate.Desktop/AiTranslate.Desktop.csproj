@@ -7,6 +7,7 @@
   <ItemGroup>
     <AvaloniaResource Include="Assets/Brand/windows/*.ico;Assets/Brand/macos/TrayTemplate@2x.png;Assets/Brand/linux/tray.png;Assets/Brand/linux/hicolor/256x256/apps/ai-translate.png" />
     <Content Include="Assets/Brand/LICENSE-MDI.txt" Link="licenses/LICENSE-MDI.txt" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets/Brand/LICENSE-FONTAWESOME.txt" Link="licenses/LICENSE-FONTAWESOME.txt" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('linux-'))">
     <Content Include="Assets/Brand/linux/ai-translate.desktop" Link="share/applications/ai-translate.desktop" CopyToPublishDirectory="PreserveNewest" />
@@ -21,6 +22,12 @@
       <ResolvedFileToPublish Include="Assets/Brand/macos/Info.plist" RelativePath="AI Translate.app/Contents/Info.plist" CopyToPublishDirectory="PreserveNewest" />
       <ResolvedFileToPublish Include="Assets/Brand/macos/ai-translate.icns" RelativePath="AI Translate.app/Contents/Resources/ai-translate.icns" CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
+  </Target>
+  <!-- A tray-resident Debug instance keeps its output DLLs locked, so `dotnet run` could never rebuild or restart. -->
+  <Target Name="StopRunningDebugInstance" BeforeTargets="_CopyFilesMarkedCopyLocal;CopyFilesToOutputDirectory"
+          Condition="$([MSBuild]::IsOSPlatform('Windows')) And '$(Configuration)' == 'Debug'">
+    <Exec Command="powershell -NoProfile -NonInteractive -Command &quot;Get-Process '$(AssemblyName)' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith('$(TargetDir)', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force; Start-Sleep -Milliseconds 300&quot;"
+          ContinueOnError="true" IgnoreExitCode="true" StandardOutputImportance="low" />
   </Target>
   <ItemGroup>
     <ProjectReference Include="../AiTranslate.Core/AiTranslate.Core.csproj" />

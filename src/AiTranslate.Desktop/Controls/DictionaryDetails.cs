@@ -106,7 +106,9 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 Custom(spec, entry.Clauses, () => DictionaryInsightBlocks.Structure(entry.Clauses));
                 break;
             case EntryBlock.Grammar:
-                Custom(spec, entry.GrammarHighlights, () => DictionaryInsightBlocks.Grammar(entry.GrammarHighlights));
+                var grammarLanguage = GrammarText.LanguageCode(entry.DetectedSourceLanguage);
+                Custom(spec, new { entry.GrammarHighlights, grammarLanguage }, () => DictionaryInsightBlocks.Grammar(entry.GrammarHighlights,
+                    grammarLanguage, linked: _finished is not null));
                 break;
             case EntryBlock.Senses:
                 Section(spec, senses, Layout.Senses, unit: "个义项");
@@ -116,7 +118,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                     () => DictionaryInsightBlocks.Literal(entry.LiteralMeaning, entry.PrimaryTranslation));
                 break;
             case EntryBlock.ContextMeaning:
-                Custom(spec, entry.ContextMeaning, () => DictionaryInsightBlocks.Note(entry.ContextMeaning, "format-quote-close", RichBlocks.CalloutTone.Insight));
+                Custom(spec, entry.ContextMeaning, () => DictionaryInsightBlocks.Note(entry.ContextMeaning, "quote-left", RichBlocks.CalloutTone.Insight));
                 break;
             case EntryBlock.Inflections:
                 var title = entry.ItemType == VocabularyItemType.Word && entry.Origin == DictionaryResultOrigin.Cache && entry.WordFamily.Count == 0
@@ -158,7 +160,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 break;
             case EntryBlock.Culture:
                 Custom(spec, new { entry.CulturalNote, entry.CulturalNotes }, () => DictionaryInsightBlocks.Combine(
-                    DictionaryInsightBlocks.Note(entry.CulturalNote, "earth", RichBlocks.CalloutTone.Neutral),
+                    DictionaryInsightBlocks.Note(entry.CulturalNote, "globe", RichBlocks.CalloutTone.Neutral),
                     DictionaryInsightBlocks.Explanations(entry.CulturalNotes, cultural: true)));
                 break;
             case EntryBlock.Thesaurus:
@@ -180,7 +182,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
                 break;
             case EntryBlock.Mnemonic:
                 Custom(spec, new { entry.MemoryMnemonic, entry.Mnemonics }, () => DictionaryInsightBlocks.Combine(
-                    DictionaryInsightBlocks.Note(entry.MemoryMnemonic, "lightbulb-on-outline", RichBlocks.CalloutTone.Attention),
+                    DictionaryInsightBlocks.Note(entry.MemoryMnemonic, "regular/lightbulb", RichBlocks.CalloutTone.Attention),
                     DictionaryInsightBlocks.Mnemonics(entry.Mnemonics)));
                 break;
             case EntryBlock.Tags:
@@ -206,7 +208,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
     {
         if (string.IsNullOrWhiteSpace(note)) return content;
         return new StackPanel { Spacing = AppTheme.Space.S, Children = { content,
-            RichBlocks.Callout("sparkles", RichText.Create(note, TextRole.Secondary), RichBlocks.CalloutTone.Insight) } };
+            RichBlocks.Callout("wand-magic-sparkles", RichText.Create(note, TextRole.Secondary), RichBlocks.CalloutTone.Insight) } };
     }
 
     private object? SourceAnnotations => _finished is { } entry
@@ -429,8 +431,8 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
 
     public static Button CreateCopyButton(Action copy)
     {
-        var copyIcon = new MdiIcon("content-copy", 17, AppTheme.TextSecondary);
-        var copyButton = StudioUi.CreateIconButton("content-copy", "复制译文", () => { });
+        var copyIcon = new FontAwesomeIcon("regular/copy", 17, AppTheme.TextSecondary);
+                var copyButton = StudioUi.CreateIconButton("regular/copy", "复制译文", () => { });
         copyButton.Content = copyIcon;
         copyButton.Click += (_, _) =>
         {
@@ -439,7 +441,7 @@ internal sealed partial class DictionaryDetails(ISpeechSynthesisService speech, 
             ToolTip.SetTip(copyButton, "已复制");
             DispatcherTimer.RunOnce(() =>
             {
-                copyIcon.IconName = "content-copy";
+                copyIcon.IconName = "regular/copy";
                 ToolTip.SetTip(copyButton, "复制译文");
             }, TimeSpan.FromMilliseconds(1400));
         };

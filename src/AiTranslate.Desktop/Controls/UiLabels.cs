@@ -32,10 +32,10 @@ public static class UiLabels
 
     public static string Rating(ReviewRating rating) => rating switch
     {
-        ReviewRating.Again => "忘记重来",
-        ReviewRating.Hard => "印象模糊",
-        ReviewRating.Good => "认识良好",
-        ReviewRating.Easy => "熟练简单",
+        ReviewRating.Again => "不认识",
+        ReviewRating.Hard => "模糊",
+        ReviewRating.Good => "认识",
+        ReviewRating.Easy => "很熟",
         _ => rating.ToString()
     };
 

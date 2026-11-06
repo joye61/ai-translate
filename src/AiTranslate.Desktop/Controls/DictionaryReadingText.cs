@@ -26,6 +26,9 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
     static DictionaryReadingText() => ContextRequestedEvent.AddClassHandler<SelectableTextBlock>(
         QuerySelection, RoutingStrategies.Tunnel);
 
+    /// <summary>Set by the app shell to decide how a right-click lookup opens. Without it the lookup runs in place.</summary>
+    internal static Action<string, PixelPoint, Action>? SelectionRouter { get; set; }
+
     public bool HasLinkedTerms => _marks.Any(mark => mark.Term is not null);
     // TextDecoration belongs to the creating UI dispatcher.
     // A thin, offset hairline reads as "clickable" without the heavy black rule of a default underline.
@@ -132,13 +135,17 @@ internal sealed class DictionaryReadingText : SelectableTextBlock
         if (query.Length == 0) return;
         var start = Math.Min(block.SelectionStart, block.SelectionEnd);
         var text = block.Text ?? block.Inlines?.Text ?? "";
+        var anchor = new Point(block.Bounds.Width / 2, block.Bounds.Height / 2);
         if (e.TryGetPosition(block, out var point))
         {
             var index = HitIndex(block, point, text.Length);
             if (index < start || index >= start + selected.Length ||
                 block is DictionaryReadingText reader && reader.TermAt(index) is not null) return;
+            anchor = point;
         }
-        lookup(query, SentenceAt(text, start, selected.Length));
+        var context = SentenceAt(text, start, selected.Length);
+        if (SelectionRouter is { } route) route(query, block.PointToScreen(anchor), () => lookup(query, context));
+        else lookup(query, context);
     }
 
     internal static string SentenceAt(string text, int index, int length)

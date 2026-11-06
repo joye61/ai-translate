@@ -99,7 +99,8 @@ public sealed record CollocationItem(
 
 public enum DictionaryResultOrigin { Ai, Cache, BuiltIn, Supplemented, Reviewed }
 
-public sealed record GrammarHighlight(string Quote, string Label, string Explanation);
+/// <param name="Topic">Canonical grammar-point name shared with the local grammar library, used to open its detailed explanation.</param>
+public sealed record GrammarHighlight(string Quote, string Label, string Explanation, string Topic = "");
 
 public sealed record TranslationDecision(string SourceQuote, string TargetQuote, string Reason, string Alternative = "", string Condition = "")
 {
@@ -181,17 +182,14 @@ public sealed record DictionaryEntryResult
     public IReadOnlyList<UsageMistake> Mistakes { get; init; } = [];
 }
 
-/// <summary>
-/// A user-defined vocabulary notebook / deck (e.g., "日常阅读生词", "技术文档核心词", "CET6/雅思核心", "金句摘录").
-/// </summary>
+/// <summary>A named group of saved entries. The system default group always exists and receives new captures.</summary>
 public sealed record VocabularyNotebook
 {
     public required string Id { get; init; }
     public required string Name { get; init; }
-    public string Description { get; init; } = "";
-    public string IconName { get; init; } = "book-open-variant";
-    public string AccentColorHex { get; init; } = "#3B82F6";
     public bool IsSystemDefault { get; init; }
+    /// <summary>Recall mode: the list shows only the headwords until an entry is revealed.</summary>
+    public bool HideTranslations { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
@@ -261,6 +259,7 @@ public sealed record VocabularyEntry
     public IReadOnlyList<Morpheme> Morphemes { get; init; } = [];
     public IReadOnlyList<SynonymNuance> SynonymNuances { get; init; } = [];
     public IReadOnlyList<UsageMistake> Mistakes { get; init; } = [];
+    // Notes, tags and stars are no longer edited in the app. They stay on saved entries so earlier data is not lost.
     public string UserPersonalNote { get; init; } = "";
 
     // Context Preservation (Where the user encountered it)

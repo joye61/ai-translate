@@ -40,8 +40,6 @@ public sealed partial class VocabularyService
             var example = result.Examples.FirstOrDefault();
             updated = updated with
             {
-                Tags = card.Tags.Count == 0 && collected.Tags.Count == 0 && result.SuggestedTags.Count > 0
-                    ? result.SuggestedTags : card.Tags,
                 ContextSentence = card.ContextSentence.Length == 0 && collected.ContextSentence.Length == 0
                     ? example?.SourceSentence ?? card.ContextSentence : card.ContextSentence,
                 ContextTranslation = card.ContextTranslation.Length == 0 && collected.ContextTranslation.Length == 0

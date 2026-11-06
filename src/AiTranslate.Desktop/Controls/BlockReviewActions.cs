@@ -18,7 +18,7 @@ internal sealed class BlockReviewActions
         changed ? $"「{title}」已更新并保存" : $"「{title}」已复核，保留原内容";
     public event Action<EntryBlock>? Requested;
     private const string ButtonLabel = "智能复核";
-    private sealed record ActionView(Button Button, TextBlock Label, MdiIcon Icon, TextBlock Error, Action<DictionaryEntryResult> Render);
+    private sealed record ActionView(Button Button, TextBlock Label, FontAwesomeIcon Icon, TextBlock Error, Action<DictionaryEntryResult> Render);
     private readonly Dictionary<EntryBlock, ActionView> _actions = [];
     public bool IsBusy { get; private set; }
 
@@ -34,7 +34,7 @@ internal sealed class BlockReviewActions
     {
         var label = TextStyles.Create(ButtonLabel, TextRole.Label, wrap: false);
         label.Foreground = AppTheme.Insight;
-        var icon = new MdiIcon("sparkles", 14, AppTheme.Insight) { VerticalAlignment = VerticalAlignment.Center };
+        var icon = new FontAwesomeIcon("wand-magic-sparkles", 14, AppTheme.Insight) { VerticalAlignment = VerticalAlignment.Center };
         var button = new Button
         {
             Classes = { "ai-review" }, MinHeight = 28, Padding = new Thickness(AppTheme.Space.M - 2, 2),
@@ -57,7 +57,7 @@ internal sealed class BlockReviewActions
         {
             view.Button.IsEnabled = !busy;
             view.Label.Text = busy && block == active ? "复核中…" : view.Error.IsVisible ? "重新复核" : ButtonLabel;
-            view.Icon.IconName = view.Error.IsVisible ? "refresh" : "sparkles";
+            view.Icon.IconName = view.Error.IsVisible ? "arrows-rotate" : "wand-magic-sparkles";
         }
     }
 
@@ -111,7 +111,7 @@ internal sealed class BlockReviewActions
         {
             if (view.Label.Text != message) return;
             view.Label.Text = ButtonLabel;
-            view.Icon.IconName = "sparkles";
+            view.Icon.IconName = "wand-magic-sparkles";
         }, TimeSpan.FromSeconds(3));
     }
 }

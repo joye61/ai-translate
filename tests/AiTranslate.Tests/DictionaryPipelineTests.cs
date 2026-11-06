@@ -30,6 +30,124 @@ internal static class PipelineReplies
 
 public sealed class DictionaryPipelineTests
 {
+    [Fact]
+    public async Task WholeReviewCanCiteAnExistingExampleAndCachesItsCompletedStatus()
+    {
+        var folder = Directory.CreateTempSubdirectory();
+        try
+        {
+            var cache = new DictionaryEntryCache(Path.Combine(folder.FullName, "review.sqlite3"));
+            var entry = new DictionaryEntryResult
+            {
+                SourceText = "coffee", PrimaryTranslation = "咖啡", DetectedSourceLanguage = "en", ReaderLanguage = "zh-Hans",
+                Senses = [new("n.", "咖啡色") { GrammarPattern = "in coffee" }],
+                Processing = new() { Intent = DictionaryLookupIntent.Learning, Extension = DictionaryStageState.Completed,
+                    Review = DictionaryStageState.Failed, Message = "审校未完成" }
+            };
+            cache.TryAdd("fixture", entry, 1);
+            var script = new Script(data => PipelineReplies.Proposal(data, "corrected",
+                new { senses = new[] { new { partOfSpeech = "n.", definitionZh = "咖啡色", grammarPattern = "coffee-coloured" } } },
+                new[] { new { field = "senses", sourceQuote = "in coffee", reason = "此处应使用颜色形容词。", severity = "minor" } }));
+            var service = new AiDictionaryService(() => script, cache);
+            var reviewed = await service.ReviewEntryAsync(cache.Read("fixture")!, default);
+            Assert.Equal(DictionaryStageState.Completed, reviewed.Processing!.Review);
+            Assert.Equal("coffee-coloured", Assert.Single(reviewed.Senses).GrammarPattern);
+            Assert.DoesNotContain("审校未完成", reviewed.Processing.Message);
+            var reopened = cache.Read("fixture")!;
+            Assert.Equal(reviewed.Processing.ReviewedContentHash, reopened.Processing!.ReviewedContentHash);
+            Assert.Same(reopened, await service.ReviewEntryAsync(reopened, default));
+            Assert.Single(script.Roles);
+        }
+        finally { folder.Delete(true); }
+    }
+
+    [Theory]
+    [InlineData("invented evidence")]
+    [InlineData("另一栏的内容")]
+    [InlineData("新写的依据")]
+    public async Task ReviewRejectsUnanchoredOrWrongFieldEvidenceAndStopsAfterOneRecovery(string quote)
+    {
+        var entry = new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡", UsageNotes = "另一栏的内容" };
+        var script = new Script(data => PipelineReplies.Proposal(data, "corrected",
+            new { primaryTranslation = "新写的依据" },
+            new[] { new { field = "primaryTranslation", sourceQuote = quote, reason = "更正", severity = "minor" } }));
+        var result = await new AiDictionaryService(() => script).ReviewEntryAsync(entry, default);
+        Assert.Equal(entry.PrimaryTranslation, result.PrimaryTranslation);
+        Assert.Equal(DictionaryStageState.Failed, result.Processing!.Review);
+        Assert.Empty(result.Processing.ReviewedContentHash);
+        Assert.Contains("问题依据未引用原文或对应栏目的已有内容", result.Processing.Message);
+        Assert.Equal(["review", "review"], script.Roles);
+    }
+
+    [Fact]
+    public async Task MalformedReviewRecoversAgainstTheOriginalSnapshotWithoutCommittingItsDraft()
+    {
+        var calls = 0;
+        var script = new Script(data => ++calls == 1
+            ? PipelineReplies.Proposal(data, "corrected", new { primaryTranslation = "不应保留的修改" })
+            : PipelineReplies.Proposal(data, "accepted"));
+        var entry = new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡" };
+        var result = await new AiDictionaryService(() => script).ReviewEntryAsync(entry, default);
+        Assert.Equal("咖啡", result.PrimaryTranslation);
+        Assert.Equal(DictionaryStageState.Completed, result.Processing!.Review);
+        Assert.Equal(2, result.Processing.Usage.Sum(u => u.Requests));
+    }
+
+    [Fact]
+    public async Task ReviewIgnoresTheCompatibleProvidersJsonFormatMarker()
+    {
+        var script = new Script(data =>
+        {
+            var reply = JsonNode.Parse(PipelineReplies.Proposal(data, "accepted"))!;
+            reply["type"] = "json_object";
+            return reply.ToJsonString();
+        });
+        var result = await new AiDictionaryService(() => script).ReviewEntryAsync(
+            new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡" }, default);
+        Assert.Equal(DictionaryStageState.Completed, result.Processing!.Review);
+        Assert.Single(script.Roles);
+    }
+
+    [Fact]
+    public async Task ReviewConnectionFailureKeepsTheReasonAndDoesNotRetryAsAFormatError()
+    {
+        var script = new Script(_ => throw new AiException("无法连接到 AI 服务端点"));
+        var result = await new AiDictionaryService(() => script).ReviewEntryAsync(
+            new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡" }, default);
+        Assert.Equal(DictionaryStageState.Failed, result.Processing!.Review);
+        Assert.Contains("无法连接到 AI 服务端点", result.Processing.Message);
+        Assert.Single(script.Roles);
+    }
+
+    [Theory]
+    [InlineData(DictionaryStageState.Completed, 0)]
+    [InlineData(DictionaryStageState.Failed, 1)]
+    public async Task ResumingLearningUsesCurrentEvidenceAndDoesNotReopenResolvedCorrections(DictionaryStageState previousReview, int openIssues)
+    {
+        var entry = new DictionaryEntryResult { SourceText = "coffee", PrimaryTranslation = "咖啡",
+            Senses = [new("n.", "咖啡") { GrammarLabel = "不可数" }],
+            Processing = new() { Intent = DictionaryLookupIntent.Learning, Extension = DictionaryStageState.Invalidated,
+                Review = previousReview, Issues = [new("senses", "不再存在的旧问题", "已修正"), new("senses", "coffee", "上轮意见")] } };
+        var script = new Script(data =>
+        {
+            var issues = data["issues"]!.AsArray();
+            Assert.DoesNotContain(issues, i => (string?)i?["sourceQuote"] == "不再存在的旧问题");
+            if ((string?)data["role"] == "learning")
+            {
+                Assert.Equal(openIssues, issues.Count);
+                return PipelineReplies.Proposal(data, "insufficient_evidence", issues: new[]
+                    { new { field = "senses", sourceQuote = "不可数", reason = "核对可数性适用范围", severity = "minor" } });
+            }
+            Assert.Equal(openIssues + 1, issues.Count);
+            Assert.Contains(issues, i => (string?)i?["sourceQuote"] == "不可数");
+            return PipelineReplies.Proposal(data, "accepted");
+        });
+        var result = await new AiDictionaryService(() => script).ReviewEntryAsync(entry, default);
+        Assert.Equal(DictionaryStageState.Completed, result.Processing!.Review);
+        Assert.Equal(DictionaryStageState.InsufficientEvidence, result.Processing.Extension);
+        Assert.Equal(["learning", "review"], script.Roles);
+    }
+
     private sealed class Script(Func<JsonObject, string> respond) : IAiTransport
     {
         public List<string> Roles { get; } = [];
@@ -292,9 +410,9 @@ public sealed class DictionaryPipelineTests
             });
             var service = new AiDictionaryService(() => transport, cache, refreshCollectedEntries: cards.RefreshCollectedEntries);
             var quick = await service.LookupOrTranslateAsync("Close the door.", "zh-Hans", "He pointed to the door.", intent: DictionaryLookupIntent.Quick);
-            var card = cards.AddOrUpdateFromDictionary(quick, contextSentence: quick.LookupContext, sourceTitle: "会话课", userNote: "课堂笔记");
+            var card = cards.AddOrUpdateFromDictionary(quick, contextSentence: quick.LookupContext, sourceTitle: "会话课");
             var personal = new BilingualExample("Please use the side door.", "请走侧门。");
-            cards.SaveEntry(card with { Examples = [personal] });
+            card = cards.SaveEntry(card with { Examples = [personal], UserPersonalNote = "课堂笔记" });
             var progress = cards.SubmitReview(card.Id, ReviewRating.Good);
             var reviewed = await service.ReviewEntryAsync(quick, default);
             Assert.Equal(["translation", "review"], transport.Roles);
